@@ -216,15 +216,22 @@ export const forgotPassword = async (req, res) => {
 
     const resetLinkApp = buildAppUrl(`/reset-password?token=${tokenPlain}&email=${encodeURIComponent(email)}`);
 
-    await sendEmail({
-      to: email,
-      subject: "Reset your password",
-      html: generateResetPasswordTemplate(user.name, resetLinkApp),
-    });
+    // Attempt to send email, but don't fail the request if SMTP is unavailable
+    try {
+      await sendEmail({
+        to: email,
+        subject: "Reset your password",
+        html: generateResetPasswordTemplate(user.name, resetLinkApp),
+      });
+    } catch (e) {
+      console.error("[forgotPassword] Email send failed:", e.message);
+      // Intentionally swallow to avoid leaking email existence and to keep UX smooth
+    }
 
     res.status(200).json({ message: "Password reset email sent" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('[forgotPassword] Unexpected error:', error);
+    res.status(500).json({ message: 'Failed to process password reset request' });
   }
 };
 
