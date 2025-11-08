@@ -25,7 +25,7 @@ export const searchUsers = async (req, res) => {
       _id: { $ne: req.user._id },
       $or: [{ name: regex }, { email: regex }],
     })
-      .select("_id name email verified")
+      .select("_id name email verified avatarUrl")
       .limit(20);
     res.json({ users });
   } catch (e) {
@@ -51,10 +51,10 @@ export const sendFriendRequest = async (req, res) => {
 export const listFriendRequests = async (req, res) => {
   try {
     const incoming = await FriendRequest.find({ to: req.user._id, status: "pending" })
-      .populate("from", "_id name email")
+      .populate("from", "_id name email avatarUrl")
       .sort({ createdAt: -1 });
     const outgoing = await FriendRequest.find({ from: req.user._id, status: "pending" })
-      .populate("to", "_id name email")
+      .populate("to", "_id name email avatarUrl")
       .sort({ createdAt: -1 });
     res.json({ incoming, outgoing });
   } catch (e) {
@@ -87,7 +87,7 @@ export const listContacts = async (req, res) => {
       status: "accepted",
     });
     const ids = accepted.map((fr) => (String(fr.from) === String(req.user._id) ? fr.to : fr.from));
-    const users = await User.find({ _id: { $in: ids } }).select("_id name email");
+  const users = await User.find({ _id: { $in: ids } }).select("_id name email avatarUrl");
     res.json({ contacts: users });
   } catch (e) {
     res.status(500).json({ message: e.message });

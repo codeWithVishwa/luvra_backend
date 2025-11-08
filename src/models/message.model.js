@@ -10,6 +10,9 @@ const messageSchema = new mongoose.Schema(
     thumbUrl: { type: String, default: null }, // For image/video thumbnail
     mediaDuration: { type: Number, default: null }, // seconds for audio/video
     readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    deleted: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );

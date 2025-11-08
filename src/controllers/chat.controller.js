@@ -42,7 +42,7 @@ export const listConversations = async (req, res) => {
     const convos = await Conversation.find({ participants: req.user._id })
       .sort({ updatedAt: -1 })
       .limit(50)
-      .populate("participants", "_id name email");
+      .populate("participants", "_id name email avatarUrl verified");
     res.json({ conversations: convos });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -160,6 +160,49 @@ export const markRead = async (req, res) => {
     }
     await Message.updateMany({ conversation: conversationId, readBy: { $ne: req.user._id } }, { $addToSet: { readBy: req.user._id } });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const msg = await Message.findById(messageId);
+    if (!msg) return res.status(404).json({ message: 'Message not found' });
+    // Only sender can delete
+    if (String(msg.sender) !== String(req.user._id)) return res.status(403).json({ message: 'Not allowed' });
+    const convo = await Conversation.findById(msg.conversation);
+    if (!convo || !convo.participants.some(p => String(p) === String(req.user._id))) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+    if (msg.deleted) return res.json({ message: msg });
+
+    msg.deleted = true;
+    msg.deletedAt = new Date();
+    msg.deletedBy = req.user._id;
+    // Clear sensitive payload
+    msg.text = null;
+    msg.mediaUrl = null;
+    msg.thumbUrl = null;
+    // Keep type as-is or set to text; UI will look at deleted flag
+    await msg.save();
+
+    // If this was the lastMessage, update a placeholder
+    if (convo.lastMessage && String(convo.lastMessage.sender) === String(req.user._id)) {
+      // We cannot compare ids directly to msg._id since lastMessage doesn't store id; set placeholder text
+      convo.lastMessage.text = 'Message deleted';
+      convo.lastMessage.at = new Date();
+      await convo.save();
+    }
+
+    const io = getIO();
+    const recipients = convo.participants.filter((p) => String(p) !== String(req.user._id));
+    recipients.forEach((rid) => {
+      io.to(`user:${rid}`).emit('message:deleted', { conversationId: String(convo._id), messageId: String(msg._id) });
+    });
+
+    res.json({ message: msg });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
