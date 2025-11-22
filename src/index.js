@@ -1,4 +1,5 @@
 import express from "express";
+import path from "path";
 import dotenv from "dotenv";
 import cors from "cors";
 import morgan from "morgan";
@@ -19,6 +20,10 @@ import errorHandler from "./middleware/errorHandler.js";
 dotenv.config();
 const app = express();
 validateEnv();
+
+// Trust first proxy (Render/Heroku/NGINX) so rate limiting & IP detection works
+// This addresses express-rate-limit ValidationError about X-Forwarded-For
+app.set('trust proxy', 1);
 
 // CORS
 const allowedOrigins = [
@@ -95,6 +100,14 @@ app.use("/api/v1/health", (req, res) => {
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/chat", chatRoutes);
+
+// Serve local uploads if present (fallback when Cloudinary isn't configured)
+// Files saved under /uploads will be exposed at /uploads/*
+const uploadsDir = path.join(process.cwd(), "uploads");
+app.use("/uploads", express.static(uploadsDir, {
+  maxAge: "7d",
+  fallthrough: true,
+}));
 
 // Error handler (last)
 app.use(errorHandler);

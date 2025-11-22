@@ -2,6 +2,9 @@ import User from "../models/user.model.js";
 import FriendRequest from "../models/friendRequest.model.js";
 import cloudinary from "cloudinary";
 import sharp from "sharp";
+import fs from "fs/promises";
+import path from "path";
+import crypto from "crypto";
 
 // Lazy Cloudinary configuration so it works even if dotenv loads later
 function ensureCloudinaryConfigured() {
@@ -14,6 +17,11 @@ function ensureCloudinaryConfigured() {
       secure: true,
     });
   }
+}
+
+function isCloudinaryConfigured() {
+  const cfg = cloudinary.v2.config();
+  return Boolean(cfg.cloud_name && cfg.api_key && cfg.api_secret);
 }
 
 export const searchUsers = async (req, res) => {
@@ -106,7 +114,11 @@ export const updateProfile = async (req, res) => {
     const { name, interests, gender } = req.body;
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (name) user.name = name;
+    if (name) {
+      const existing = await User.findOne({ nameLower: name.toLowerCase(), _id: { $ne: user._id } }).select('_id');
+      if (existing) return res.status(409).json({ message: 'Username already taken' });
+      user.name = name;
+    }
     if (Array.isArray(interests)) user.interests = interests.slice(0, 20);
     if (gender) user.gender = gender;
     await user.save();
@@ -125,18 +137,30 @@ export const uploadAvatar = async (req, res) => {
       .resize(256, 256, { fit: "cover" })
       .webp({ quality: 80 })
       .toBuffer();
-
-    // Simpler: upload base64 data URI (avoids stream piping complexity)
-    const dataUri = `data:image/webp;base64,${processed.toString('base64')}`;
-    const result = await cloudinary.v2.uploader.upload(dataUri, {
-      folder: "luvra/avatars",
-      overwrite: true,
-      resource_type: "image",
-    });
+    let avatarUrl;
+    if (isCloudinaryConfigured()) {
+      // Simpler: upload base64 data URI (avoids stream piping complexity)
+      const dataUri = `data:image/webp;base64,${processed.toString('base64')}`;
+      const result = await cloudinary.v2.uploader.upload(dataUri, {
+        folder: "luvra/avatars",
+        overwrite: true,
+        resource_type: "image",
+      });
+      avatarUrl = result.secure_url;
+    } else {
+      // Fallback: save locally under /uploads/avatars
+      const uploadsRoot = path.join(process.cwd(), 'uploads');
+      const avatarsDir = path.join(uploadsRoot, 'avatars');
+      await fs.mkdir(avatarsDir, { recursive: true }).catch(() => {});
+      const name = `${crypto.randomBytes(12).toString('hex')}.webp`;
+      const outPath = path.join(avatarsDir, name);
+      await fs.writeFile(outPath, processed);
+      avatarUrl = `/uploads/avatars/${name}`;
+    }
 
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    user.avatarUrl = result.secure_url;
+    user.avatarUrl = avatarUrl;
     await user.save();
     res.json({ avatarUrl: user.avatarUrl });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -150,4 +174,68 @@ export const listOnlineUsers = async (req, res) => {
     const users = await User.find({ _id: { $in: onlineIds } }).select("_id name email avatarUrl");
     res.json({ users });
   } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+export const removeFriend = async (req, res) => {
+  try {
+    const otherId = req.params.userId;
+    // Find accepted friend request in either direction
+    const fr = await FriendRequest.findOne({
+      status: 'accepted',
+      $or: [
+        { from: req.user._id, to: otherId },
+        { from: otherId, to: req.user._id },
+      ],
+    });
+    if (!fr) return res.status(404).json({ message: 'Friendship not found' });
+    await fr.deleteOne();
+    return res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+// Recommend friends based on overlapping interests and not already connected or pending
+export const recommendFriends = async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id).select('_id interests');
+    if (!me) return res.status(404).json({ message: 'User not found' });
+    const myInterests = Array.isArray(me.interests) ? me.interests.filter(Boolean) : [];
+    if (myInterests.length === 0) return res.json({ users: [] });
+
+    // Build exclusion list: self, accepted friends, pending requests
+    const accepted = await FriendRequest.find({
+      status: 'accepted',
+      $or: [ { from: req.user._id }, { to: req.user._id } ]
+    }).select('from to');
+    const pending = await FriendRequest.find({
+      status: 'pending',
+      $or: [ { from: req.user._id }, { to: req.user._id } ]
+    }).select('from to');
+    const exclude = new Set([ String(req.user._id) ]);
+    const addEx = (fr) => {
+      exclude.add(String(fr.from) === String(req.user._id) ? String(fr.to) : String(fr.from));
+    };
+    accepted.forEach(addEx); pending.forEach(addEx);
+
+    // Initial candidate fetch: any overlap
+    const candidates = await User.find({
+      _id: { $nin: Array.from(exclude) },
+      interests: { $in: myInterests }
+    }).select('_id name email avatarUrl interests').limit(75);
+
+    const mySet = new Set(myInterests);
+    const scored = candidates.map(u => {
+      const overlap = (u.interests || []).reduce((acc, val) => acc + (mySet.has(val) ? 1 : 0), 0);
+      return { user: u, overlap };
+    })
+    .filter(s => s.overlap > 0)
+    .sort((a,b) => b.overlap - a.overlap || a.user.name.localeCompare(b.user.name))
+    .slice(0, 15)
+    .map(s => ({ _id: s.user._id, name: s.user.name, email: s.user.email, avatarUrl: s.user.avatarUrl, overlap: s.overlap, interests: s.user.interests }));
+
+    res.json({ users: scored });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 };

@@ -89,6 +89,8 @@ Health: http://localhost:5000/api/v1/health
 - Images: resized thumbnail (320x320 webp) plus full media upload.
 - Audio & video uploaded via base64; consider direct upload for very large files.
 - Improve playback later using `expo-av` components.
+- Fallback when Cloudinary is not configured: files are stored locally under `/uploads` and served at `GET /uploads/*`. This is convenient for local dev but not recommended for production (ephemeral file systems).
+- Limits: avatars up to 5 MB; chat media (image/video/audio) up to 50 MB. Adjust in `src/middleware/upload.js` if needed.
 
 ## Security & Hardening
 - bcrypt for passwords

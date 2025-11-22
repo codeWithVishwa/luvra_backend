@@ -4,6 +4,9 @@ import User from "../models/user.model.js";
 import { getIO } from "../socket.js";
 import cloudinary from "cloudinary";
 import sharp from "sharp";
+import fs from "fs/promises";
+import path from "path";
+import crypto from "crypto";
 
 function ensureCloudinaryConfigured() {
   const cfg = cloudinary.v2.config();
@@ -15,6 +18,37 @@ function ensureCloudinaryConfigured() {
       secure: true,
     });
   }
+}
+
+function isCloudinaryConfigured() {
+  const cfg = cloudinary.v2.config();
+  return Boolean(cfg.cloud_name && cfg.api_key && cfg.api_secret);
+}
+
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+}
+
+function extFromMime(mime) {
+  // Very small mapping sufficient for common types
+  if (mime.startsWith("image/")) {
+    if (mime === "image/jpeg") return ".jpg";
+    if (mime === "image/png") return ".png";
+    if (mime === "image/webp") return ".webp";
+    return ".img";
+  }
+  if (mime.startsWith("video/")) {
+    if (mime === "video/mp4") return ".mp4";
+    if (mime === "video/quicktime") return ".mov";
+    return ".vid";
+  }
+  if (mime.startsWith("audio/")) {
+    if (mime === "audio/mpeg") return ".mp3";
+    if (mime === "audio/mp4") return ".m4a";
+    if (mime === "audio/aac") return ".aac";
+    return ".aud";
+  }
+  return "";
 }
 
 function ensureParticipants(userId, otherId) {
@@ -113,25 +147,52 @@ export const sendMediaMessage = async (req, res) => {
     else if (mime.startsWith('audio/')) type = 'audio';
     else return res.status(400).json({ message: 'Unsupported media type' });
 
-    // Optional: create a smaller image preview for image/video
+    let mediaUrl = null;
     let thumbUrl = null;
-    if (type === 'image') {
-      const thumb = await sharp(file.buffer).resize(320, 320, { fit: 'cover' }).webp({ quality: 70 }).toBuffer();
-      const dataUri = `data:image/webp;base64,${thumb.toString('base64')}`;
-      const upThumb = await cloudinary.v2.uploader.upload(dataUri, { folder: 'luvra/media/thumbs', resource_type: 'image' });
-      thumbUrl = upThumb.secure_url;
-    }
 
-    // Upload main media via base64 data URI (works for image/audio). For large video, consider direct upload.
-    let resource_type = type === 'audio' ? 'video' : type; // Cloudinary uses 'video' for audio as well
-    const dataUri = `data:${mime};base64,${file.buffer.toString('base64')}`;
-    const uploaded = await cloudinary.v2.uploader.upload(dataUri, { folder: 'luvra/media', resource_type });
+    if (isCloudinaryConfigured()) {
+      // Optional: create a smaller image preview for image
+      if (type === 'image') {
+        const thumb = await sharp(file.buffer).resize(320, 320, { fit: 'cover' }).webp({ quality: 70 }).toBuffer();
+        const dataUriThumb = `data:image/webp;base64,${thumb.toString('base64')}`;
+        const upThumb = await cloudinary.v2.uploader.upload(dataUriThumb, { folder: 'luvra/media/thumbs', resource_type: 'image' });
+        thumbUrl = upThumb.secure_url;
+      }
+
+      // Upload main media via base64 data URI (works for image/audio). For large video, consider direct upload.
+      let resource_type = type === 'audio' ? 'video' : type; // Cloudinary uses 'video' for audio as well
+      const dataUri = `data:${mime};base64,${file.buffer.toString('base64')}`;
+      const uploaded = await cloudinary.v2.uploader.upload(dataUri, { folder: 'luvra/media', resource_type });
+      mediaUrl = uploaded.secure_url;
+    } else {
+      // Fallback: save locally under /uploads/media and optional /uploads/thumbs
+      const uploadsRoot = path.join(process.cwd(), 'uploads');
+      const mediaDir = path.join(uploadsRoot, 'media');
+      const thumbsDir = path.join(uploadsRoot, 'thumbs');
+      await ensureDir(mediaDir);
+      await ensureDir(thumbsDir);
+
+      const base = crypto.randomBytes(16).toString('hex');
+      const ext = extFromMime(mime) || (type === 'image' ? '.jpg' : type === 'video' ? '.mp4' : '.bin');
+      const filename = `${base}${ext}`;
+      const filePath = path.join(mediaDir, filename);
+      await fs.writeFile(filePath, file.buffer);
+      mediaUrl = `/uploads/media/${filename}`;
+
+      if (type === 'image') {
+        const thumbBuf = await sharp(file.buffer).resize(320, 320, { fit: 'cover' }).webp({ quality: 70 }).toBuffer();
+        const thumbName = `${base}.webp`;
+        const thumbPath = path.join(thumbsDir, thumbName);
+        await fs.writeFile(thumbPath, thumbBuf);
+        thumbUrl = `/uploads/thumbs/${thumbName}`;
+      }
+    }
 
     const msg = await Message.create({
       conversation: conversationId,
       sender: req.user._id,
       type,
-      mediaUrl: uploaded.secure_url,
+      mediaUrl,
       thumbUrl,
       text: null,
     });

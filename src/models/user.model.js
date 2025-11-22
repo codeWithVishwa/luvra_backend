@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
+    name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
   gender: { type: String },
@@ -16,8 +16,17 @@ const userSchema = new mongoose.Schema(
     // Password reset
     passwordResetToken: { type: String, default: null }, // stored as sha256 hash
     passwordResetExpires: { type: Date, default: null },
+    // Lowercase name for uniqueness enforcement (case-insensitive)
+    nameLower: { type: String, index: true, unique: true, sparse: true },
   },
   { timestamps: true }
 );
+
+userSchema.pre('save', function(next) {
+  if (this.isModified('name') && typeof this.name === 'string') {
+    this.nameLower = this.name.toLowerCase();
+  }
+  next();
+});
 
 export default mongoose.model("User", userSchema);

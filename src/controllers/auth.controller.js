@@ -59,9 +59,10 @@ export const register = async (req, res) => {
     if (!/\S+@\S+\.\S+/.test(email))
       return res.status(400).json({ message: "Invalid email format" });
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser)
-      return res.status(400).json({ message: "User already exists" });
+    const existingEmail = await User.findOne({ email }).select('_id');
+    if (existingEmail) return res.status(400).json({ message: "Email already registered" });
+    const existingName = await User.findOne({ nameLower: name.toLowerCase() }).select('_id');
+    if (existingName) return res.status(409).json({ message: "Username already taken" });
 
     const hashed = await bcrypt.hash(password, 10);
     const user = await User.create({ name, email, password: hashed });
@@ -89,6 +90,9 @@ export const register = async (req, res) => {
     const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
     res.status(201).json({ message: "Registered successfully. Verify your email.", user: safeUser });
   } catch (error) {
+    if (error?.code === 11000 && error?.keyPattern?.nameLower) {
+      return res.status(409).json({ message: 'Username already taken' });
+    }
     res.status(500).json({ error: error.message });
   }
 };

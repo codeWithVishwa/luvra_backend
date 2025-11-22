@@ -6,6 +6,8 @@ export const apiLimiter = rateLimit({
   max: 100, // limit each IP to 100 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
+  // Explicitly read IP respecting trust proxy setting
+  keyGenerator: (req) => req.ip,
 });
 
 // Stricter limiter for auth endpoints
@@ -15,4 +17,5 @@ export const authLimiter = rateLimit({
   message: { message: "Too many auth attempts, please try again later" },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => req.ip,
 });
