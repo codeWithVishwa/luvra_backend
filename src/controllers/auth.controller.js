@@ -71,15 +71,12 @@ export const register = async (req, res) => {
       existingUser.emailVerificationOTP = otpHash;
       existingUser.emailVerificationOTPExpires = new Date(Date.now() + 10 * 60 * 1000);
       await existingUser.save();
-      try {
-        await sendEmail({
-          to: email,
-          subject: "Your verification code",
-          html: generateVerifyEmailOtpTemplate(existingUser.name || name, otp),
-        });
-      } catch (e) {
-        console.error("Email resend failed:", e.message);
-      }
+      // Fire & forget email (do not block response)
+      sendEmail({
+        to: email,
+        subject: "Your verification code",
+        html: generateVerifyEmailOtpTemplate(existingUser.name || name, otp),
+      }).catch(e => console.error("Email resend failed:", e.message));
       return res.status(200).json({ message: "Email already registered but not verified. Verification code resent.", emailAlreadyRegistered: true, user: { _id: existingUser._id, name: existingUser.name, email: existingUser.email, verified: existingUser.verified } });
     }
     const existingName = await User.findOne({ nameLower: name.toLowerCase() }).select('_id');
@@ -95,15 +92,11 @@ export const register = async (req, res) => {
     user.emailVerificationOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await user.save();
 
-    try {
-      await sendEmail({
-        to: email,
-        subject: "Your verification code",
-        html: generateVerifyEmailOtpTemplate(name, otp),
-      });
-    } catch (e) {
-      console.error("Email send failed:", e.message);
-    }
+    sendEmail({
+      to: email,
+      subject: "Your verification code",
+      html: generateVerifyEmailOtpTemplate(name, otp),
+    }).catch(e => console.error("Email send failed:", e.message));
 
     // Important: never return password hashes to client
     const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
@@ -154,11 +147,11 @@ export const sendVerification = async (req, res) => {
     user.emailVerificationExpires = null;
     await user.save();
 
-    await sendEmail({
+    sendEmail({
       to: email,
       subject: "Your verification code",
       html: generateVerifyEmailOtpTemplate(user.name, otp),
-    });
+    }).catch(e => console.error("Email send failed:", e.message));
 
     res.status(200).json({ message: "Verification code sent" });
   } catch (error) {
@@ -271,15 +264,11 @@ export const forgotPassword = async (req, res) => {
     user.passwordResetExpires = null;
     await user.save();
 
-    try {
-      await sendEmail({
-        to: email,
-        subject: "Your password reset code",
-        html: generateResetPasswordOtpTemplate(user.name, otp),
-      });
-    } catch (e) {
-      console.error("[forgotPassword] Email send failed:", e.message);
-    }
+    sendEmail({
+      to: email,
+      subject: "Your password reset code",
+      html: generateResetPasswordOtpTemplate(user.name, otp),
+    }).catch(e => console.error("[forgotPassword] Email send failed:", e.message));
 
     res.status(200).json({ message: "Password reset code sent" });
   } catch (error) {

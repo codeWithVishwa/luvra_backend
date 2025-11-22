@@ -24,14 +24,27 @@ async function getTransporter() {
     port: Number(SMTP_PORT),
     secure: Number(SMTP_PORT) === 465, // true for 465, false for other ports
     auth: { user: SMTP_USER, pass: SMTP_PASS },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 50,
   });
   return transporter;
 }
 
 export async function sendEmail({ to, subject, html, text }) {
+  if (String(process.env.DEV_EMAIL_DISABLE).toLowerCase() === 'true') {
+    console.log(`[mail] DEV_EMAIL_DISABLE=true, skipping email to ${to} (${subject})`);
+    return;
+  }
   const from = process.env.SMTP_FROM || `no-reply@${new URL(process.env.APP_BASE_URL || 'http://localhost').hostname}`;
   const tx = await getTransporter();
-  const info = await tx.sendMail({ from, to, subject, html, text });
+  const info = await tx.sendMail({ from, to, subject, html, text }).catch(err => {
+    console.error('[mail] sendMail error:', err.message);
+    throw err;
+  });
   if (usingEthereal) {
     const preview = nodemailer.getTestMessageUrl(info);
     if (preview) {
