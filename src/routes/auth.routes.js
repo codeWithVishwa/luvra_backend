@@ -4,8 +4,10 @@ import {
 	login,
 	sendVerification,
 	verifyEmail,
+	verifyEmailOtp,
 	forgotPassword,
 	resetPassword,
+	resetPasswordOtp,
 	changePassword,
 } from "../controllers/auth.controller.js";
 import auth from "../middleware/auth.js";
@@ -17,8 +19,10 @@ router.post("/register", authLimiter, register);
 router.post("/login", authLimiter, login);
 router.post("/send-verification", authLimiter, sendVerification);
 router.get("/verify-email", verifyEmail);
+router.post("/verify-email-otp", authLimiter, verifyEmailOtp);
 router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/reset-password", authLimiter, resetPassword);
+router.post("/reset-password-otp", authLimiter, resetPasswordOtp);
 router.post("/change-password", auth, changePassword);
 
 export default router;

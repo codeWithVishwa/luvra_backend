@@ -6,7 +6,7 @@ export const generateVerifyEmailTemplate = (name, link) => `
     <div style="max-width:600px;margin:auto;background:#fff;border-radius:10px;overflow:hidden;
       box-shadow:0 2px 6px rgba(0,0,0,0.1)">
       <div style="background:#007bff;color:white;text-align:center;padding:16px 0;font-size:20px">
-        Welcome to Luvra 💙
+        Welcome to SnapTalk 💙
       </div>
       <div style="padding:25px;font-size:15px;color:#333">
         <p>Hi <strong>${name || "there"}</strong>,</p>
@@ -44,3 +44,72 @@ export const generateResetPasswordTemplate = (name, link) => `
     </div>
   </div>
 `;
+
+// OTP-based templates
+export const generateVerifyEmailOtpTemplate = (name, code) => `
+  <div style="font-family:'Segoe UI',sans-serif;background:#0d0d0d;padding:30px">
+    <div style="max-width:600px;margin:auto;background:#1a1a1a;border-radius:14px;overflow:hidden;
+      border:1px solid rgba(168,19,166,0.35);
+      box-shadow:0 0 25px rgba(168,19,166,0.35)">
+      
+      <div style="background:#a813a6ff;color:white;text-align:center;padding:18px 0;
+        font-size:22px;font-weight:600;letter-spacing:1px">
+        Verify Your Email
+      </div>
+
+      <div style="padding:30px;font-size:15px;color:#e6e6e6;line-height:1.7">
+        <p style="margin:0 0 12px">Hi <strong>${name || 'there'}</strong>,</p>
+
+        <p style="margin:0 0 22px;color:#cccccc">
+          Use the verification code below inside the app to activate your account:
+        </p>
+
+        <div style="text-align:center;margin:28px 0;font-size:36px;letter-spacing:8px;
+          font-weight:700;color:#a813a6ff;
+          text-shadow:0 0 12px rgba(168,19,166,0.9), 0 0 20px rgba(168,19,166,0.6)">
+          ${code}
+        </div>
+
+        <p style="font-size:13px;color:#888;margin-top:25px">
+          This code expires in 10 minutes. If it expires you can request a new one.
+        </p>
+      </div>
+
+    </div>
+  </div>
+`;
+
+
+export const generateResetPasswordOtpTemplate = (name, code) => `
+  <div style="font-family:'Segoe UI',sans-serif;background:#0d0d0d;padding:30px">
+    <div style="max-width:600px;margin:auto;background:#1a1a1a;border-radius:14px;overflow:hidden;
+      border:1px solid rgba(168,19,166,0.35);
+      box-shadow:0 0 25px rgba(168,19,166,0.35)">
+      
+      <div style="background:#a813a6ff;color:white;text-align:center;padding:18px 0;
+        font-size:22px;font-weight:600;letter-spacing:1px">
+        Password Reset Code
+      </div>
+
+      <div style="padding:30px;font-size:15px;color:#e6e6e6;line-height:1.7">
+        <p style="margin:0 0 12px">Hi <strong>${name || 'there'}</strong>,</p>
+
+        <p style="margin:0 0 22px;color:#cccccc">
+          Use the code below inside the app to reset your password:
+        </p>
+
+        <div style="text-align:center;margin:28px 0;font-size:36px;letter-spacing:8px;
+          font-weight:700;color:#a813a6ff;
+          text-shadow:0 0 12px rgba(168,19,166,0.9), 0 0 20px rgba(168,19,166,0.6)">
+          ${code}
+        </div>
+
+        <p style="font-size:13px;color:#888;margin-top:25px">
+          This code expires in 10 minutes. If you did not request a reset, you can ignore this email.
+        </p>
+      </div>
+
+    </div>
+  </div>
+`;
+
