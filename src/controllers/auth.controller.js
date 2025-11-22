@@ -58,9 +58,30 @@ export const register = async (req, res) => {
       return res.status(400).json({ message: "Password must be at least 8 characters long" });
     if (!/\S+@\S+\.\S+/.test(email))
       return res.status(400).json({ message: "Invalid email format" });
-
-    const existingEmail = await User.findOne({ email }).select('_id');
-    if (existingEmail) return res.status(400).json({ message: "Email already registered" });
+    // Check if email already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      // If verified, instruct to login
+      if (existingUser.verified) {
+        return res.status(400).json({ message: "Email already registered. Please log in." });
+      }
+      // If not verified: resend OTP and return a flag indicating redirect to OTP page
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+      existingUser.emailVerificationOTP = otpHash;
+      existingUser.emailVerificationOTPExpires = new Date(Date.now() + 10 * 60 * 1000);
+      await existingUser.save();
+      try {
+        await sendEmail({
+          to: email,
+          subject: "Your verification code",
+          html: generateVerifyEmailOtpTemplate(existingUser.name || name, otp),
+        });
+      } catch (e) {
+        console.error("Email resend failed:", e.message);
+      }
+      return res.status(200).json({ message: "Email already registered but not verified. Verification code resent.", emailAlreadyRegistered: true, user: { _id: existingUser._id, name: existingUser.name, email: existingUser.email, verified: existingUser.verified } });
+    }
     const existingName = await User.findOne({ nameLower: name.toLowerCase() }).select('_id');
     if (existingName) return res.status(409).json({ message: "Username already taken" });
 
@@ -86,7 +107,7 @@ export const register = async (req, res) => {
 
     // Important: never return password hashes to client
     const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
-    res.status(201).json({ message: "Registered successfully. Enter the verification code sent to your email.", user: safeUser });
+    res.status(201).json({ message: "Account created successfully. Enter the verification code sent to your email.", user: safeUser, created: true });
   } catch (error) {
     if (error?.code === 11000 && error?.keyPattern?.nameLower) {
       return res.status(409).json({ message: 'Username already taken' });

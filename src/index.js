@@ -29,13 +29,23 @@ app.set('trust proxy', 1);
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   process.env.APP_BASE_URL,
+  'http://localhost:19006', // Expo web dev
+  'http://127.0.0.1:19006',
+  'http://localhost:5173', // Vite default
+  'http://127.0.0.1:5173'
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // allow non-browser clients
+      if (!origin) return callback(null, true); // RN/Expo native requests have no origin
+      // Allow any localhost during development
+      if (/^https?:\/\/localhost(?::\d+)?$/i.test(origin) || /^https?:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin)) {
+        return callback(null, true);
+      }
       if (allowedOrigins.some((o) => origin.startsWith(o))) return callback(null, true);
+      // In non-production, be permissive to ease dev
+      if (process.env.NODE_ENV !== 'production') return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
