@@ -2,7 +2,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import User from "../models/user.model.js";
-import { sendEmail, buildApiUrl, buildAppUrl } from "../utils/email.js";
+import { sendEmail, buildApiUrl, buildAppUrl, getEmailHealth } from "../utils/email.js";
 import { generateVerifyEmailTemplate, generateResetPasswordTemplate, generateVerifyEmailOtpTemplate, generateResetPasswordOtpTemplate } from "../utils/emailTemplates.js";
 
 const htmlPage = ({ title, heading, body, success, ctaLink, ctaText }) => `<!doctype html>
@@ -118,7 +118,20 @@ export const login = async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(400).json({ message: "Invalid credentials" });
     if (!user.verified) {
-      return res.status(403).json({ message: "User not verified. Please verify your email." });
+      // Generate (or refresh) OTP for email verification
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+      user.emailVerificationOTP = otpHash;
+      user.emailVerificationOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      await user.save();
+      // Fire & forget email send so login response is not blocked
+      sendEmail({
+        to: user.email,
+        subject: "Your verification code",
+        html: generateVerifyEmailOtpTemplate(user.name, otp),
+      }).catch(e => console.error("[login] Verification email send failed:", e.message));
+      const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
+      return res.status(200).json({ requiresEmailVerification: true, message: "Email not verified. Verification code sent.", user: safeUser });
     }
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
@@ -355,5 +368,14 @@ export const changePassword = async (req, res) => {
     res.status(200).json({ message: "Password changed successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const smtpHealth = async (req, res) => {
+  try {
+    const health = getEmailHealth();
+    res.status(200).json({ ok: true, health });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 };

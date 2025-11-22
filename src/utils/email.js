@@ -14,6 +14,14 @@ let transporter;
 let usingEthereal = false;
 let verifyAttempted = false;
 let fallbackActive = false;
+const mailHealth = {
+  usingEthereal: false,
+  fallbackActive: false,
+  verifyOk: null,
+  lastVerifyError: null,
+  lastSendError: null,
+  lastFallback: null,
+};
 async function createEtherealTransport() {
   const testAccount = await nodemailer.createTestAccount();
   transporter = nodemailer.createTransport({
@@ -27,20 +35,33 @@ async function createEtherealTransport() {
   });
   usingEthereal = true;
   fallbackActive = true;
+  mailHealth.usingEthereal = true;
+  mailHealth.fallbackActive = true;
+  mailHealth.lastFallback = new Date().toISOString();
   console.warn('[mail] Using Ethereal fallback transporter.');
   return transporter;
 }
 
 async function verifyTransporter(tx) {
   try {
-    // Race manual timeout vs verify
+    // Allow skipping verify entirely (e.g., dev networks or blocked ports)
+    if (String(process.env.MAIL_SKIP_VERIFY).toLowerCase() === 'true') {
+      return true;
+    }
+    // Race manual timeout vs verify (only for non-ethereal primary)
     await Promise.race([
       tx.verify(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('verify timeout')), 5000))
     ]);
+    mailHealth.verifyOk = true;
     return true;
   } catch (e) {
-    logMailErrorOnce(`[mail] transporter.verify failed: ${e.message}`);
+    mailHealth.verifyOk = false;
+    mailHealth.lastVerifyError = e.message;
+    // Suppress noisy verify timeout logs when already on Ethereal fallback
+    if (!usingEthereal) {
+      logMailErrorOnce(`[mail] transporter.verify failed: ${e.message}`);
+    }
     return false;
   }
 }
@@ -89,6 +110,7 @@ export async function sendEmail({ to, subject, html, text }) {
     }
   } catch (err) {
     logMailErrorOnce(`[mail] sendMail error: ${err.message}`);
+    mailHealth.lastSendError = err.message;
     const isTimeout = /timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ECONNECTION/i.test(err.code || err.message || '') || err.message.includes('Connection timeout');
     const allowAutoFallback = !usingEthereal && (String(process.env.MAIL_FALLBACK_TO_ETHEREAL).toLowerCase() === 'true' || isTimeout);
     if (allowAutoFallback) {
@@ -100,6 +122,7 @@ export async function sendEmail({ to, subject, html, text }) {
         if (preview2) console.log(`[mail] Fallback preview URL: ${preview2}`);
       } catch (e2) {
         logMailErrorOnce(`[mail] fallback send failed: ${e2.message}`);
+        mailHealth.lastSendError = e2.message;
       }
     }
   }
@@ -131,4 +154,17 @@ export function buildAppUrl(path) {
 export function buildApiUrl(path) {
   const base = process.env.APP_BASE_URL || "http://localhost:5000";
   return base.replace(/\/$/, "") + path;
+}
+
+export function getEmailHealth() {
+  return {
+    usingEthereal: mailHealth.usingEthereal,
+    fallbackActive: mailHealth.fallbackActive,
+    verifyOk: mailHealth.verifyOk,
+    lastVerifyError: mailHealth.lastVerifyError,
+    lastSendError: mailHealth.lastSendError,
+    lastFallback: mailHealth.lastFallback,
+    debug: String(process.env.MAIL_DEBUG).toLowerCase() === 'true',
+    skipVerify: String(process.env.MAIL_SKIP_VERIFY).toLowerCase() === 'true',
+  };
 }

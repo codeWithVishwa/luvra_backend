@@ -9,6 +9,7 @@ import {
 	resetPassword,
 	resetPasswordOtp,
 	changePassword,
+	smtpHealth,
 } from "../controllers/auth.controller.js";
 import auth from "../middleware/auth.js";
 import { authLimiter } from "../middleware/rateLimit.js";
@@ -24,5 +25,6 @@ router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/reset-password", authLimiter, resetPassword);
 router.post("/reset-password-otp", authLimiter, resetPasswordOtp);
 router.post("/change-password", auth, changePassword);
+router.get("/smtp-health", smtpHealth);
 
 export default router;
