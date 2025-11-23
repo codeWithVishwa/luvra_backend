@@ -18,16 +18,47 @@ MONGO_URI=
 JWT_SECRET=
 APP_BASE_URL=http://localhost:5000        # Set to https://<render-host>.onrender.com in production
 FRONTEND_URL=luvra://                     # Deep link scheme
-SMTP_HOST=
-SMTP_PORT=
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM=
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
+RESEND_API_KEY=                           # Obtain from https://resend.com (Project > API Keys)
+EMAIL_FROM=App Name <no-reply@yourdomain.com>  # Verified sending domain/address in Resend
+MAIL_DEBUG=false                          # Optional verbose logging
+DEV_EMAIL_DISABLE=false                   # Skip sending entirely when true
 ```
-If SMTP_* omitted, Ethereal test account fallback is used (preview URL logged in console).
+
+### Email Sending (Resend)
+The backend now uses the Resend REST API instead of SMTP/Gmail. Benefits: no blocked ports, simple API key auth, reliable delivery.
+
+Minimum required: `RESEND_API_KEY`, `EMAIL_FROM`.
+Make sure the domain in `EMAIL_FROM` is verified in your Resend dashboard; otherwise messages may be rejected.
+
+Example production config:
+```
+RESEND_API_KEY=re_XXXXXXXXXXXXXXXXXXXX
+EMAIL_FROM=Luvra <no-reply@yourdomain.com>
+MAIL_DEBUG=false
+```
+
+Disable all email (e.g., tests):
+```
+DEV_EMAIL_DISABLE=true
+```
+
+### Health Endpoint
+`GET /api/v1/auth/smtp-health` (legacy path) now returns:
+```
+{
+  "ok": true,
+  "health": {
+    "usingResend": true,
+    "lastSendId": "<id or null>",
+    "lastSendError": null,
+    "debug": false
+  }
+}
+```
+If `lastSendError` persists, verify API key/domain and check Resend dashboard logs.
 
 ## Auth Endpoints (`/api/v1/auth`)
 - `POST /register` { name, email, password }
@@ -84,6 +115,7 @@ Health: http://localhost:5000/api/v1/health
 2. Set env vars (see list). First deploy yields URL.
 3. Set `APP_BASE_URL` to the Render URL and redeploy to fix email links.
 4. Point Expo app: `EXPO_PUBLIC_API_BASE_URL=https://<render-host>.onrender.com`.
+5. Confirm email health: `curl https://<render-host>.onrender.com/api/v1/auth/smtp-health`.
 
 ## Media Notes
 - Images: resized thumbnail (320x320 webp) plus full media upload.

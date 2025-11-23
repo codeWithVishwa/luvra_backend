@@ -1,0 +1,24 @@
+.env
+.env.*
+*.env
+node_modules/
+dist/
+coverage/
+*.log
+logs/
+*.pid
+uploads/
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+/.vscode
+# Build artifacts
+*.tsbuildinfo
+# Sensitive keys accidentally created
+service-account-*.json
+# Ignore lock files if you prefer one manager
+yarn.lock
+pnpm-lock.yaml
+package-lock.json

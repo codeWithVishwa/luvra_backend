@@ -1,98 +1,15 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
-let lastErrorLogTs = 0;
-function logMailErrorOnce(msg) {
-  const now = Date.now();
-  if (now - lastErrorLogTs > 60000) { // at most once per minute
-    console.error(msg);
-    lastErrorLogTs = now;
-  }
-}
-
-// Create a reusable transporter using SMTP details from env
-let transporter;
-let usingEthereal = false;
-let verifyAttempted = false;
-let fallbackActive = false;
 const mailHealth = {
-  usingEthereal: false,
-  fallbackActive: false,
-  verifyOk: null,
-  lastVerifyError: null,
+  usingResend: true,
   lastSendError: null,
-  lastFallback: null,
+  lastSendId: null,
 };
-async function createEtherealTransport() {
-  const testAccount = await nodemailer.createTestAccount();
-  transporter = nodemailer.createTransport({
-    host: 'smtp.ethereal.email',
-    port: 587,
-    secure: false,
-    auth: { user: testAccount.user, pass: testAccount.pass },
-    connectionTimeout: 8000,
-    greetingTimeout: 8000,
-    socketTimeout: 8000,
-  });
-  usingEthereal = true;
-  fallbackActive = true;
-  mailHealth.usingEthereal = true;
-  mailHealth.fallbackActive = true;
-  mailHealth.lastFallback = new Date().toISOString();
-  console.warn('[mail] Using Ethereal fallback transporter.');
-  return transporter;
-}
 
-async function verifyTransporter(tx) {
-  try {
-    // Allow skipping verify entirely (e.g., dev networks or blocked ports)
-    if (String(process.env.MAIL_SKIP_VERIFY).toLowerCase() === 'true') {
-      return true;
-    }
-    // Race manual timeout vs verify (only for non-ethereal primary)
-    await Promise.race([
-      tx.verify(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('verify timeout')), 5000))
-    ]);
-    mailHealth.verifyOk = true;
-    return true;
-  } catch (e) {
-    mailHealth.verifyOk = false;
-    mailHealth.lastVerifyError = e.message;
-    // Suppress noisy verify timeout logs when already on Ethereal fallback
-    if (!usingEthereal) {
-      logMailErrorOnce(`[mail] transporter.verify failed: ${e.message}`);
-    }
-    return false;
-  }
-}
-
-async function getTransporter() {
-  if (transporter) return transporter;
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
-    return await createEtherealTransport();
-  }
-  transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
-    pool: true,
-    maxConnections: 3,
-    maxMessages: 50,
-  });
-  // Attempt verify once; if it fails and fallback allowed, switch
-  if (!verifyAttempted) {
-    verifyAttempted = true;
-    const ok = await verifyTransporter(transporter);
-    if (!ok && String(process.env.MAIL_FALLBACK_TO_ETHEREAL).toLowerCase() === 'true') {
-      await createEtherealTransport();
-    }
-  }
-  return transporter;
+function getResendClient() {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error('Missing RESEND_API_KEY');
+  return new Resend(key);
 }
 
 export async function sendEmail({ to, subject, html, text }) {
@@ -100,49 +17,17 @@ export async function sendEmail({ to, subject, html, text }) {
     console.log(`[mail] DEV_EMAIL_DISABLE=true, skipping email to ${to} (${subject})`);
     return;
   }
-  const from = process.env.SMTP_FROM || `no-reply@${new URL(process.env.APP_BASE_URL || 'http://localhost').hostname}`;
-  let tx = await getTransporter();
   try {
-    const info = await attemptSend({ tx, from, to, subject, html, text });
-    if (usingEthereal) {
-      const preview = nodemailer.getTestMessageUrl(info);
-      if (preview) console.log(`[mail] Preview URL: ${preview}`);
+    const resend = getResendClient();
+    const from = process.env.EMAIL_FROM || `Luvra <no-reply@${new URL(process.env.APP_BASE_URL || 'http://localhost').hostname}>`;
+    const result = await resend.emails.send({ from, to, subject, html: html || (text ? `<pre>${text}</pre>` : '') });
+    mailHealth.lastSendId = result?.id || null;
+    if (String(process.env.MAIL_DEBUG).toLowerCase() === 'true') {
+      console.log('[mail] Resend send result:', result);
     }
-  } catch (err) {
-    logMailErrorOnce(`[mail] sendMail error: ${err.message}`);
-    mailHealth.lastSendError = err.message;
-    const isTimeout = /timeout|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|ECONNECTION/i.test(err.code || err.message || '') || err.message.includes('Connection timeout');
-    const allowAutoFallback = !usingEthereal && (String(process.env.MAIL_FALLBACK_TO_ETHEREAL).toLowerCase() === 'true' || isTimeout);
-    if (allowAutoFallback) {
-      console.warn('[mail] Switching to Ethereal fallback due to SMTP failure.');
-      tx = await createEtherealTransport();
-      try {
-        const info2 = await attemptSend({ tx, from, to, subject, html, text });
-        const preview2 = nodemailer.getTestMessageUrl(info2);
-        if (preview2) console.log(`[mail] Fallback preview URL: ${preview2}`);
-      } catch (e2) {
-        logMailErrorOnce(`[mail] fallback send failed: ${e2.message}`);
-        mailHealth.lastSendError = e2.message;
-      }
-    }
-  }
-}
-
-async function attemptSend({ tx, from, to, subject, html, text }) {
-  const debug = String(process.env.MAIL_DEBUG).toLowerCase() === 'true';
-  const payload = { from, to, subject, html, text };
-  if (debug) console.log('[mail] attemptSend payload:', { to, subject, htmlLength: html?.length });
-  try {
-    return await tx.sendMail(payload);
   } catch (e) {
-    // One retry after short delay for transient timeouts
-    const transient = /ETIMEDOUT|ECONNRESET|ECONNECTION|EHOSTUNREACH|timeout/i.test(e.code || e.message || '');
-    if (transient) {
-      if (debug) console.log('[mail] transient error, retrying once:', e.message);
-      await new Promise(r => setTimeout(r, 800));
-      return await tx.sendMail(payload);
-    }
-    throw e;
+    mailHealth.lastSendError = e.message;
+    console.error('[mail] Resend send failed:', e.message);
   }
 }
 
@@ -158,13 +43,9 @@ export function buildApiUrl(path) {
 
 export function getEmailHealth() {
   return {
-    usingEthereal: mailHealth.usingEthereal,
-    fallbackActive: mailHealth.fallbackActive,
-    verifyOk: mailHealth.verifyOk,
-    lastVerifyError: mailHealth.lastVerifyError,
+    usingResend: mailHealth.usingResend,
+    lastSendId: mailHealth.lastSendId,
     lastSendError: mailHealth.lastSendError,
-    lastFallback: mailHealth.lastFallback,
     debug: String(process.env.MAIL_DEBUG).toLowerCase() === 'true',
-    skipVerify: String(process.env.MAIL_SKIP_VERIFY).toLowerCase() === 'true',
   };
 }
