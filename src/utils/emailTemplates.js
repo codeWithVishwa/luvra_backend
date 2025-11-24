@@ -1,10 +1,16 @@
 // Centralized, styled email templates for transactional emails
 // Keep styles inline for broad email client support
 
-export const generateVerifyEmailTemplate = (name, link) => `
+export const generateVerifyEmailTemplate = (name, link) => {
+  const logoUrl = process.env.EMAIL_LOGO_URL || 'https://res.cloudinary.com/dli1zwoz8/image/upload/v1763968442/icon_h8kza6.png';
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;padding:18px 0 4px"><img src='${logoUrl}' alt='Logo' style='width:72px;height:auto;display:inline-block;border-radius:12px' /></div>`
+    : '';
+  return `
   <div style="font-family:'Segoe UI',sans-serif;background:#f9f9f9;padding:20px">
     <div style="max-width:600px;margin:auto;background:#fff;border-radius:10px;overflow:hidden;
       box-shadow:0 2px 6px rgba(0,0,0,0.1)">
+      ${logoBlock}
       <div style="background:#007bff;color:white;text-align:center;padding:16px 0;font-size:20px">
         Welcome to SnapTalk 💙
       </div>
@@ -22,11 +28,18 @@ export const generateVerifyEmailTemplate = (name, link) => `
     </div>
   </div>
 `;
+};
 
-export const generateResetPasswordTemplate = (name, link) => `
+export const generateResetPasswordTemplate = (name, link) => {
+  const logoUrl = process.env.EMAIL_LOGO_URL || 'https://res.cloudinary.com/dli1zwoz8/image/upload/v1763968442/icon_h8kza6.png';
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;padding:18px 0 4px"><img src='${logoUrl}' alt='Logo' style='width:72px;height:auto;display:inline-block;border-radius:12px' /></div>`
+    : '';
+  return `
   <div style="font-family:'Segoe UI',sans-serif;background:#f9f9f9;padding:20px">
     <div style="max-width:600px;margin:auto;background:#fff;border-radius:10px;overflow:hidden;
       box-shadow:0 2px 6px rgba(0,0,0,0.1)">
+      ${logoBlock}
       <div style="background:#ff9800;color:white;text-align:center;padding:16px 0;font-size:20px">
         Reset your password
       </div>
@@ -44,14 +57,20 @@ export const generateResetPasswordTemplate = (name, link) => `
     </div>
   </div>
 `;
+};
 
 // OTP-based templates
-export const generateVerifyEmailOtpTemplate = (name, code) => `
+export const generateVerifyEmailOtpTemplate = (name, code) => {
+  const logoUrl = process.env.EMAIL_LOGO_URL || 'https://res.cloudinary.com/dli1zwoz8/image/upload/v1763968442/icon_h8kza6.png';
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;padding:26px 0 8px"><img src='${logoUrl}' alt='Logo' style='width:88px;height:auto;display:inline-block;border-radius:16px' /></div>`
+    : '';
+  return `
   <div style="font-family:'Segoe UI',sans-serif;background:#0d0d0d;padding:30px">
     <div style="max-width:600px;margin:auto;background:#1a1a1a;border-radius:14px;overflow:hidden;
       border:1px solid rgba(168,19,166,0.35);
       box-shadow:0 0 25px rgba(168,19,166,0.35)">
-      
+      ${logoBlock}
       <div style="background:#a813a6ff;color:white;text-align:center;padding:18px 0;
         font-size:22px;font-weight:600;letter-spacing:1px">
         Verify Your Email
@@ -78,14 +97,20 @@ export const generateVerifyEmailOtpTemplate = (name, code) => `
     </div>
   </div>
 `;
+};
 
 
-export const generateResetPasswordOtpTemplate = (name, code) => `
+export const generateResetPasswordOtpTemplate = (name, code) => {
+  const logoUrl = process.env.EMAIL_LOGO_URL || 'https://res.cloudinary.com/dli1zwoz8/image/upload/v1763968442/icon_h8kza6.png';
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;padding:26px 0 8px"><img src='${logoUrl}' alt='Logo' style='width:88px;height:auto;display:inline-block;border-radius:16px' /></div>`
+    : '';
+  return `
   <div style="font-family:'Segoe UI',sans-serif;background:#0d0d0d;padding:30px">
     <div style="max-width:600px;margin:auto;background:#1a1a1a;border-radius:14px;overflow:hidden;
       border:1px solid rgba(168,19,166,0.35);
       box-shadow:0 0 25px rgba(168,19,166,0.35)">
-      
+      ${logoBlock}
       <div style="background:#a813a6ff;color:white;text-align:center;padding:18px 0;
         font-size:22px;font-weight:600;letter-spacing:1px">
         Password Reset Code
@@ -112,4 +137,5 @@ export const generateResetPasswordOtpTemplate = (name, code) => `
     </div>
   </div>
 `;
+};
 
