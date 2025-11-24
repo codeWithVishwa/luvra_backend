@@ -56,14 +56,44 @@ function ensureParticipants(userId, otherId) {
   return a < b ? [a, b] : [b, a];
 }
 
+async function getInteractionBlock(userId, otherId) {
+  if (!otherId) return { blocked: false };
+  const [me, other] = await Promise.all([
+    User.findById(userId).select('_id blockedUsers'),
+    User.findById(otherId).select('_id blockedUsers'),
+  ]);
+  if (!other) return { notFound: true };
+  const blockedByMe = Array.isArray(me?.blockedUsers) && me.blockedUsers.some((id) => String(id) === String(otherId));
+  const blockedByOther = Array.isArray(other.blockedUsers) && other.blockedUsers.some((id) => String(id) === String(userId));
+  if (blockedByMe) return { blocked: true, message: 'Unblock this user to chat' };
+  if (blockedByOther) return { blocked: true, message: 'This user has blocked you' };
+  return { blocked: false };
+}
+
+function clearDeletionForParticipants(convo) {
+  if (!Array.isArray(convo.deletedFor) || !convo.deletedFor.length) return false;
+  const remaining = convo.deletedFor.filter((id) => !convo.participants.some((p) => String(p) === String(id)));
+  const changed = remaining.length !== convo.deletedFor.length;
+  if (changed) {
+    convo.deletedFor = remaining;
+  }
+  return changed;
+}
+
 export const getOrCreateConversation = async (req, res) => {
   try {
     const otherId = req.params.userId;
     if (String(otherId) === String(req.user._id)) return res.status(400).json({ message: "Cannot chat with yourself" });
+    const blockStatus = await getInteractionBlock(req.user._id, otherId);
+    if (blockStatus.notFound) return res.status(404).json({ message: 'User not found' });
+    if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
     const [u1, u2] = ensureParticipants(req.user._id, otherId);
     let convo = await Conversation.findOne({ participants: { $all: [u1, u2], $size: 2 } });
     if (!convo) {
       convo = await Conversation.create({ participants: [u1, u2] });
+    } else if (Array.isArray(convo.deletedFor) && convo.deletedFor.some((id) => String(id) === String(req.user._id))) {
+      convo.deletedFor = convo.deletedFor.filter((id) => String(id) !== String(req.user._id));
+      await convo.save();
     }
     res.json({ conversation: convo });
   } catch (e) {
@@ -73,7 +103,7 @@ export const getOrCreateConversation = async (req, res) => {
 
 export const listConversations = async (req, res) => {
   try {
-    const convos = await Conversation.find({ participants: req.user._id })
+    const convos = await Conversation.find({ participants: req.user._id, deletedFor: { $ne: req.user._id } })
       .sort({ updatedAt: -1 })
       .limit(50)
       .populate("participants", "_id name email avatarUrl verified");
@@ -101,6 +131,12 @@ export const listMessages = async (req, res) => {
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
     }
+    const others = convo.participants.filter((p) => String(p) !== String(req.user._id));
+    for (const participant of others) {
+      const blockStatus = await getInteractionBlock(req.user._id, participant);
+      if (blockStatus.notFound) return res.status(404).json({ message: 'User not found' });
+      if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+    }
     const q = { conversation: conversationId };
     if (before) q.createdAt = { $lt: new Date(before) };
     const msgs = await Message.find(q).sort({ createdAt: -1 }).limit(Number(limit));
@@ -120,9 +156,16 @@ export const sendMessage = async (req, res) => {
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
     }
+    const others = convo.participants.filter((p) => String(p) !== String(req.user._id));
+    for (const participant of others) {
+      const blockStatus = await getInteractionBlock(req.user._id, participant);
+      if (blockStatus.notFound) return res.status(404).json({ message: 'User not found' });
+      if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+    }
 
     const msg = await Message.create({ conversation: conversationId, sender: req.user._id, text, readBy: [req.user._id] });
     convo.lastMessage = { text, sender: req.user._id, at: new Date() };
+    clearDeletionForParticipants(convo);
     await convo.save();
 
     // Emit via socket to the other participant(s)
@@ -209,6 +252,7 @@ export const sendMediaMessage = async (req, res) => {
     });
 
     convo.lastMessage = { text: type.toUpperCase() + ' attachment', sender: req.user._id, at: new Date() };
+    clearDeletionForParticipants(convo);
     await convo.save();
 
     const io = getIO();
@@ -275,6 +319,21 @@ export const deleteMessage = async (req, res) => {
     });
 
     res.json({ message: msg });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const deleteConversationForUser = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const convo = await Conversation.findOneAndUpdate(
+      { _id: conversationId, participants: req.user._id },
+      { $addToSet: { deletedFor: req.user._id } },
+      { new: true }
+    );
+    if (!convo) return res.status(404).json({ message: 'Conversation not found' });
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

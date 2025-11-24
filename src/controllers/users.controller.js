@@ -25,6 +25,26 @@ function isCloudinaryConfigured() {
   return Boolean(cfg.cloud_name && cfg.api_key && cfg.api_secret);
 }
 
+async function getBlockStatus(userId, otherId) {
+  const [me, other] = await Promise.all([
+    User.findById(userId).select('_id blockedUsers'),
+    User.findById(otherId).select('_id name email avatarUrl blockedUsers'),
+  ]);
+  if (!other) return { notFound: true };
+  const blockedByMe = Array.isArray(me?.blockedUsers) && me.blockedUsers.some((id) => String(id) === String(otherId));
+  const blockedByOther = Array.isArray(other.blockedUsers) && other.blockedUsers.some((id) => String(id) === String(userId));
+  return { blockedByMe, blockedByOther, other };
+}
+
+async function removeFriendshipBetween(a, b) {
+  await FriendRequest.deleteMany({
+    $or: [
+      { from: a, to: b },
+      { from: b, to: a },
+    ],
+  });
+}
+
 export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
@@ -46,6 +66,10 @@ export const sendFriendRequest = async (req, res) => {
   try {
     const to = req.params.userId;
     if (to === String(req.user._id)) return res.status(400).json({ message: "Cannot send request to yourself" });
+    const blockStatus = await getBlockStatus(req.user._id, to);
+    if (blockStatus.notFound) return res.status(404).json({ message: 'User not found' });
+    if (blockStatus.blockedByMe) return res.status(400).json({ message: 'Unblock this user to interact' });
+    if (blockStatus.blockedByOther) return res.status(403).json({ message: 'You cannot interact with this user' });
     const fr = await FriendRequest.findOneAndUpdate(
       { from: req.user._id, to },
       { $setOnInsert: { from: req.user._id, to, status: "pending" } },
@@ -253,6 +277,44 @@ export const removeFriend = async (req, res) => {
     if (!fr) return res.status(404).json({ message: 'Friendship not found' });
     await fr.deleteOne();
     return res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listBlockedUsers = async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id).select('blockedUsers');
+    const ids = me?.blockedUsers || [];
+    if (!ids.length) return res.json({ users: [] });
+    const users = await User.find({ _id: { $in: ids } }).select('_id name email avatarUrl');
+    const map = new Map(users.map((u) => [String(u._id), u]));
+    const ordered = ids.map((id) => map.get(String(id))).filter(Boolean);
+    res.json({ users: ordered });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const blockUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (String(userId) === String(req.user._id)) return res.status(400).json({ message: 'Cannot block yourself' });
+    const target = await User.findById(userId).select('_id name email avatarUrl');
+    if (!target) return res.status(404).json({ message: 'User not found' });
+    await User.findByIdAndUpdate(req.user._id, { $addToSet: { blockedUsers: target._id } });
+    await removeFriendshipBetween(req.user._id, target._id);
+    res.json({ user: target });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const unblockUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await User.findByIdAndUpdate(req.user._id, { $pull: { blockedUsers: userId } });
+    res.json({ userId });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

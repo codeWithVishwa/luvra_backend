@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema(
     lastActiveAt: { type: Date, default: Date.now, index: true },
     // Users who have liked this profile
     profileLikes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   },
   { timestamps: true }
 );
