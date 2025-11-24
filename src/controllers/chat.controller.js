@@ -77,7 +77,17 @@ export const listConversations = async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(50)
       .populate("participants", "_id name email avatarUrl verified");
-    res.json({ conversations: convos });
+    // Compute unread counts for each conversation based on messages not yet read by current user
+    const userId = String(req.user._id);
+    const withUnread = await Promise.all(
+      convos.map(async (c) => {
+        const unread = await Message.countDocuments({ conversation: c._id, readBy: { $ne: userId } });
+        const obj = c.toObject();
+        obj.unreadCount = unread;
+        return obj;
+      })
+    );
+    res.json({ conversations: withUnread });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -111,7 +121,7 @@ export const sendMessage = async (req, res) => {
       return res.status(404).json({ message: "Conversation not found" });
     }
 
-    const msg = await Message.create({ conversation: conversationId, sender: req.user._id, text });
+    const msg = await Message.create({ conversation: conversationId, sender: req.user._id, text, readBy: [req.user._id] });
     convo.lastMessage = { text, sender: req.user._id, at: new Date() };
     await convo.save();
 
@@ -195,6 +205,7 @@ export const sendMediaMessage = async (req, res) => {
       mediaUrl,
       thumbUrl,
       text: null,
+      readBy: [req.user._id],
     });
 
     convo.lastMessage = { text: type.toUpperCase() + ' attachment', sender: req.user._id, at: new Date() };
