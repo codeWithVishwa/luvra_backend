@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true },
   gender: { type: String },
   avatarUrl: { type: String, default: null },
+  bio: { type: String, trim: true, maxlength: 300 },
     interests: [String],
     honorScore: { type: Number, default: 50 },
     verified: { type: Boolean, default: false },

@@ -104,14 +104,14 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests gender verified honorScore");
+    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests gender bio verified honorScore");
     res.json({ user });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
 export const updateProfile = async (req, res) => {
   try {
-    const { name, interests, gender } = req.body;
+    const { name, interests, gender, bio } = req.body;
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
     if (name) {
@@ -121,8 +121,9 @@ export const updateProfile = async (req, res) => {
     }
     if (Array.isArray(interests)) user.interests = interests.slice(0, 20);
     if (gender) user.gender = gender;
+    if (typeof bio === 'string') user.bio = bio.slice(0, 300);
     await user.save();
-    res.json({ user: { _id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender } });
+    res.json({ user: { _id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio } });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -181,6 +182,16 @@ export const getUserBasic = async (req, res) => {
     const { userId } = req.params;
     const user = await User.findById(userId).select('_id name avatarUrl lastActiveAt');
     if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ user });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+export const getUserPublicProfile = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select('_id name avatarUrl interests gender bio');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    // Optionally enforce friendship before returning; skipped for now for simplicity
     res.json({ user });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
