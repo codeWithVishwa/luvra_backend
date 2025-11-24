@@ -171,8 +171,17 @@ import { getOnlineUsers } from "../socket.js";
 export const listOnlineUsers = async (req, res) => {
   try {
     const onlineIds = Array.from(getOnlineUsers());
-    const users = await User.find({ _id: { $in: onlineIds } }).select("_id name email avatarUrl");
+    const users = await User.find({ _id: { $in: onlineIds } }).select("_id name email avatarUrl lastActiveAt");
     res.json({ users });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+export const getUserBasic = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select('_id name avatarUrl lastActiveAt');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ user });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 

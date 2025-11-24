@@ -1,4 +1,5 @@
 import { Server } from "socket.io";
+import User from "./models/user.model.js";
 
 let io;
 const onlineUsers = new Set();
@@ -16,7 +17,9 @@ export function initSocket(server) {
     if (userId) {
       socket.join(`user:${userId}`);
       onlineUsers.add(String(userId));
-      io.emit("presence:update", { userId: String(userId), online: true });
+      // Fire & forget update of lastActiveAt
+      User.findByIdAndUpdate(userId, { lastActiveAt: new Date() }).catch(()=>{});
+      io.emit("presence:update", { userId: String(userId), online: true, lastActiveAt: new Date().toISOString() });
     }
 
     socket.on("disconnect", () => {
@@ -25,7 +28,9 @@ export function initSocket(server) {
         const room = io.sockets.adapter.rooms.get(`user:${userId}`);
         if (!room || room.size === 0) {
           onlineUsers.delete(String(userId));
-          io.emit("presence:update", { userId: String(userId), online: false });
+          const ts = new Date();
+          User.findByIdAndUpdate(userId, { lastActiveAt: ts }).catch(()=>{});
+          io.emit("presence:update", { userId: String(userId), online: false, lastActiveAt: ts.toISOString() });
         }
       }
     });

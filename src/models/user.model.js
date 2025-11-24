@@ -24,6 +24,8 @@ const userSchema = new mongoose.Schema(
     passwordResetOTPExpires: { type: Date, default: null },
     // Lowercase name for uniqueness enforcement (case-insensitive)
     nameLower: { type: String, index: true, unique: true, sparse: true },
+    // Presence tracking
+    lastActiveAt: { type: Date, default: Date.now, index: true },
   },
   { timestamps: true }
 );
