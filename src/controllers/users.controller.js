@@ -191,8 +191,10 @@ export const getUserPublicProfile = async (req, res) => {
     const { userId } = req.params;
     const user = await User.findById(userId).select('_id name avatarUrl interests gender bio');
     if (!user) return res.status(404).json({ message: 'User not found' });
-    // Optionally enforce friendship before returning; skipped for now for simplicity
-    res.json({ user });
+    // Friend count (accepted requests where this user is either side)
+    const friendCount = await FriendRequest.countDocuments({ status: 'accepted', $or: [ { from: userId }, { to: userId } ] });
+    // Optionally could add relationship status relative to requesting user later
+    res.json({ user: { _id: user._id, name: user.name, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio, friendCount } });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
