@@ -104,8 +104,10 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests gender bio verified honorScore");
-    res.json({ user });
+    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests gender bio verified honorScore profileLikes");
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
+    res.json({ user: { _id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio, verified: user.verified, honorScore: user.honorScore, profileLikeCount } });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
