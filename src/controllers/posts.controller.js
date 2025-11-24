@@ -1,0 +1,243 @@
+import cloudinary from "cloudinary";
+import Post from "../models/post.model.js";
+import FriendRequest from "../models/friendRequest.model.js";
+import User from "../models/user.model.js";
+
+function ensureCloudinaryConfigured() {
+  const cfg = cloudinary.v2.config();
+  if (!cfg.api_key || !cfg.cloud_name) {
+    cloudinary.v2.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true,
+    });
+  }
+}
+
+const MAX_VIDEO_SECONDS = 20;
+const MAX_MEDIA_PER_POST = 4;
+
+async function getFriendIds(userId) {
+  const accepted = await FriendRequest.find({
+    status: "accepted",
+    $or: [{ from: userId }, { to: userId }],
+  }).select("from to");
+  const ids = new Set();
+  accepted.forEach((fr) => {
+    ids.add(String(fr.from) === String(userId) ? String(fr.to) : String(fr.from));
+  });
+  return ids;
+}
+
+function serializePost(post, viewerId) {
+  const likes = Array.isArray(post.likes) ? post.likes.map((id) => String(id)) : [];
+  return {
+    _id: post._id,
+    caption: post.caption,
+    media: post.media,
+    visibility: post.visibility,
+    createdAt: post.createdAt,
+    author: post.author
+      ? {
+          _id: post.author._id,
+          name: post.author.name,
+          avatarUrl: post.author.avatarUrl,
+          isPrivate: post.author.isPrivate,
+        }
+      : null,
+    likeCount: likes.length,
+    likedByMe: viewerId ? likes.includes(String(viewerId)) : false,
+  };
+}
+
+function uploadBuffer(buffer, options) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.v2.uploader.upload_stream(options, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
+}
+
+async function canViewPost(viewerId, post) {
+  if (String(post.author) === String(viewerId)) return true;
+  if (post.visibility === "public") return true;
+  const friendIds = await getFriendIds(viewerId);
+  return friendIds.has(String(post.author));
+}
+
+export const uploadPostMedia = async (req, res) => {
+  try {
+    ensureCloudinaryConfigured();
+    if (!req.file) return res.status(400).json({ message: "No file provided" });
+    const isVideo = req.file.mimetype.startsWith("video/");
+    const resourceType = isVideo ? "video" : "image";
+    const folder = `luvra/posts/${req.user._id}`;
+    const result = await uploadBuffer(req.file.buffer, {
+      folder,
+      resource_type: resourceType,
+      overwrite: false,
+    });
+    if (isVideo && result.duration && result.duration > MAX_VIDEO_SECONDS) {
+      await cloudinary.v2.uploader.destroy(result.public_id, { resource_type: "video" }).catch(() => {});
+      return res.status(400).json({ message: `Videos must be under ${MAX_VIDEO_SECONDS} seconds.` });
+    }
+    const media = {
+      url: result.secure_url,
+      type: isVideo ? "video" : "image",
+      publicId: result.public_id,
+      width: result.width,
+      height: result.height,
+      durationSeconds: result.duration ? Math.round(result.duration) : undefined,
+    };
+    res.status(201).json({ media });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const createPost = async (req, res) => {
+  try {
+    const author = await User.findById(req.user._id).select("_id isPrivate name avatarUrl");
+    if (!author) return res.status(404).json({ message: "User not found" });
+
+    const caption = typeof req.body.caption === "string" ? req.body.caption.trim().slice(0, 500) : "";
+    const incomingMedia = Array.isArray(req.body.media) ? req.body.media : [];
+    const media = incomingMedia
+      .slice(0, MAX_MEDIA_PER_POST)
+      .map((item) => ({
+        url: item?.url,
+        type: item?.type === "video" ? "video" : "image",
+        publicId: item?.publicId,
+        width: item?.width,
+        height: item?.height,
+        durationSeconds: item?.durationSeconds,
+      }))
+      .filter((item) => item.url);
+
+    if (!caption && media.length === 0) {
+      return res.status(400).json({ message: "Post must include text or media" });
+    }
+
+    const videoCount = media.filter((m) => m.type === "video").length;
+    if (videoCount > 1) return res.status(400).json({ message: "Only one video allowed per post" });
+    const video = media.find((m) => m.type === "video");
+    if (video && video.durationSeconds && video.durationSeconds > MAX_VIDEO_SECONDS) {
+      return res.status(400).json({ message: `Videos must be under ${MAX_VIDEO_SECONDS} seconds.` });
+    }
+
+    const post = await Post.create({
+      author: author._id,
+      caption,
+      media,
+      visibility: author.isPrivate ? "private" : "public",
+    });
+
+    const populated = await post.populate("author", "_id name avatarUrl isPrivate");
+    res.status(201).json({ post: serializePost(populated, req.user._id) });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listFeedPosts = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
+    const before = req.query.before ? new Date(req.query.before) : null;
+    const friendIds = await getFriendIds(req.user._id);
+    const filters = [
+      { visibility: "public" },
+      { author: req.user._id },
+    ];
+    if (friendIds.size) {
+      filters.push({ visibility: "private", author: { $in: Array.from(friendIds) } });
+    }
+    const query = Post.find({ $or: filters });
+    if (before && !isNaN(before.getTime())) {
+      query.where("createdAt").lt(before);
+    }
+    const posts = await query
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate("author", "_id name avatarUrl isPrivate");
+    const serialized = posts.map((p) => serializePost(p, req.user._id));
+    const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt.toISOString() : null;
+    res.json({ posts: serialized, nextCursor });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listUserPosts = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const target = await User.findById(userId).select("_id isPrivate");
+    if (!target) return res.status(404).json({ message: "User not found" });
+    if (String(userId) !== String(req.user._id) && target.isPrivate) {
+      const friendIds = await getFriendIds(target._id);
+      if (!friendIds.has(String(req.user._id))) {
+        return res.status(403).json({ message: "Posts are private" });
+      }
+    }
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
+    const before = req.query.before ? new Date(req.query.before) : null;
+    const query = Post.find({ author: userId });
+    if (before && !isNaN(before.getTime())) query.where("createdAt").lt(before);
+    const posts = await query
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate("author", "_id name avatarUrl isPrivate");
+    const serialized = posts.map((p) => serializePost(p, req.user._id));
+    const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt.toISOString() : null;
+    res.json({ posts: serialized, nextCursor });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const likePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findById(postId);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+    const already = post.likes.some((id) => String(id) === String(req.user._id));
+    if (!already) {
+      post.likes.push(req.user._id);
+      await post.save();
+    }
+    res.json({ likeCount: post.likes.length, liked: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const unlikePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findById(postId);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+    const beforeLength = post.likes.length;
+    post.likes = post.likes.filter((id) => String(id) !== String(req.user._id));
+    if (post.likes.length !== beforeLength) await post.save();
+    res.json({ likeCount: post.likes.length, liked: false });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const deletePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findById(postId);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (String(post.author) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
+    await post.deleteOne();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};

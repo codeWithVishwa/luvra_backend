@@ -8,6 +8,7 @@ Express + Mongoose + Socket.IO service offering authentication, profile, real‑
 - Real-time chat (text, image, video, audio) via Socket.IO
 - Presence (online/offline broadcast)
 - Profile editing: name, gender, interests, avatar (Cloudinary)
+- Instagram-style posts with Cloudinary uploads (images + <=20s video) and likes
 - Media thumbnails (images) with sharp
 - Rate limiting, sanitization, helmet security headers
 
@@ -97,6 +98,15 @@ If `lastSendError` persists, verify API key/domain and check Resend dashboard lo
 }
 ```
 
+## Post Endpoints (`/api/v1/posts`) [auth]
+- `POST /media` form-data: `media` (image or video up to 20s). Returns a Cloudinary descriptor used when composing posts.
+- `POST /` { caption?: string, media?: Array<CloudinaryDescriptor> } — accepts up to 4 media items (max 1 video) and auto-sets visibility to `public` or `private` based on the author's profile.
+- `GET /feed?before&limit` — paginated feed containing public posts, your posts, plus private posts from accepted friends.
+- `GET /user/:userId?before&limit` — paginated posts for a specific profile, respecting privacy rules.
+- `POST /:postId/like` — like a post you are allowed to view.
+- `DELETE /:postId/like` — remove a like (same visibility rules as like).
+- `DELETE /:postId` — author-only removal of a post (removes Cloudinary links only from DB; media stays in Cloudinary until managed separately).
+
 ## Socket.IO Events
 - Client joins room `user:<userId>` automatically.
 - `message:new` { conversationId, message }
@@ -122,7 +132,7 @@ Health: http://localhost:5000/api/v1/health
 - Audio & video uploaded via base64; consider direct upload for very large files.
 - Improve playback later using `expo-av` components.
 - Fallback when Cloudinary is not configured: files are stored locally under `/uploads` and served at `GET /uploads/*`. This is convenient for local dev but not recommended for production (ephemeral file systems).
-- Limits: avatars up to 5 MB; chat media (image/video/audio) up to 50 MB. Adjust in `src/middleware/upload.js` if needed.
+- Limits: avatars up to 5 MB; chat media (image/video/audio) up to 50 MB. Posts accept up to 4 media assets per post and only one video (<=20 seconds, 50 MB upload cap). Adjust in `src/middleware/upload.js` and `posts.controller.js` if needed.
 
 ## Security & Hardening
 - bcrypt for passwords

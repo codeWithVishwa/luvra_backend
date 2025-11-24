@@ -14,6 +14,7 @@ import chatRoutes from "./routes/chat.routes.js";
 import { apiLimiter } from "./middleware/rateLimit.js";
 import { validateEnv } from "./utils/validateEnv.js";
 import errorHandler from "./middleware/errorHandler.js";
+import postRoutes from "./routes/posts.routes.js";
 // If you kept express-mongo-sanitize and are on an Express-5-safe version, you can import and use it here.
 // import mongoSanitize from "express-mongo-sanitize";
 
@@ -110,6 +111,7 @@ app.use("/api/v1/health", (req, res) => {
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/users", userRoutes);
 app.use("/api/v1/chat", chatRoutes);
+app.use("/api/v1/posts", postRoutes);
 
 // Serve local uploads if present (fallback when Cloudinary isn't configured)
 // Files saved under /uploads will be exposed at /uploads/*
