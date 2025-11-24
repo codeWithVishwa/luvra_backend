@@ -19,6 +19,7 @@ const postSchema = new mongoose.Schema(
     media: { type: [mediaSchema], default: [] },
     visibility: { type: String, enum: ["public", "private"], default: "public" },
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    commentCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

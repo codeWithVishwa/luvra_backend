@@ -3,8 +3,10 @@ import auth from "../middleware/auth.js";
 import { uploadMedia } from "../middleware/upload.js";
 import {
   createPost,
+  addComment,
   deletePost,
   likePost,
+  listPostComments,
   listFeedPosts,
   listUserPosts,
   unlikePost,
@@ -19,6 +21,8 @@ router.get("/feed", auth, listFeedPosts);
 router.get("/user/:userId", auth, listUserPosts);
 router.post("/:postId/like", auth, likePost);
 router.delete("/:postId/like", auth, unlikePost);
+router.get("/:postId/comments", auth, listPostComments);
+router.post("/:postId/comments", auth, addComment);
 router.delete("/:postId", auth, deletePost);
 
 export default router;

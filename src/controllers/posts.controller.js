@@ -2,6 +2,7 @@ import cloudinary from "cloudinary";
 import Post from "../models/post.model.js";
 import FriendRequest from "../models/friendRequest.model.js";
 import User from "../models/user.model.js";
+import Comment from "../models/comment.model.js";
 
 function ensureCloudinaryConfigured() {
   const cfg = cloudinary.v2.config();
@@ -38,6 +39,7 @@ function serializePost(post, viewerId) {
     media: post.media,
     visibility: post.visibility,
     createdAt: post.createdAt,
+    commentCount: typeof post.commentCount === "number" ? post.commentCount : 0,
     author: post.author
       ? {
           _id: post.author._id,
@@ -48,6 +50,21 @@ function serializePost(post, viewerId) {
       : null,
     likeCount: likes.length,
     likedByMe: viewerId ? likes.includes(String(viewerId)) : false,
+  };
+}
+
+function serializeComment(comment) {
+  return {
+    _id: comment._id,
+    text: comment.text,
+    createdAt: comment.createdAt,
+    author: comment.author
+      ? {
+          _id: comment.author._id,
+          name: comment.author.name,
+          avatarUrl: comment.author.avatarUrl,
+        }
+      : null,
   };
 }
 
@@ -236,7 +253,58 @@ export const deletePost = async (req, res) => {
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (String(post.author) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
     await post.deleteOne();
+    await Comment.deleteMany({ post: post._id }).catch(() => {});
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listPostComments = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findById(postId).select("author visibility");
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
+    const before = req.query.before ? new Date(req.query.before) : null;
+
+    const query = Comment.find({ post: postId });
+    if (before && !isNaN(before.getTime())) query.where("createdAt").lt(before);
+    const comments = await query
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate("author", "_id name avatarUrl")
+      .exec();
+
+    const serialized = comments.map(serializeComment);
+    const nextCursor = comments.length === limit ? comments[comments.length - 1].createdAt.toISOString() : null;
+    res.json({ comments: serialized, nextCursor });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const addComment = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const text = typeof req.body.text === "string" ? req.body.text.trim().slice(0, 500) : "";
+    if (!text) return res.status(400).json({ message: "Comment cannot be empty" });
+
+    const post = await Post.findById(postId).select("author visibility");
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+
+    const comment = await Comment.create({
+      post: post._id,
+      author: req.user._id,
+      text,
+    });
+
+    await Post.updateOne({ _id: post._id }, { $inc: { commentCount: 1 } }).catch(() => {});
+    const populated = await comment.populate("author", "_id name avatarUrl");
+    res.status(201).json({ comment: serializeComment(populated) });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
