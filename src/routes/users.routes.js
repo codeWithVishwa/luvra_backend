@@ -1,6 +1,6 @@
 import express from "express";
 import auth from "../middleware/auth.js";
-import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike } from "../controllers/users.controller.js";
+import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers } from "../controllers/users.controller.js";
 import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
@@ -19,5 +19,6 @@ router.get("/recommend", auth, recommendFriends);
 router.get("/basic/:userId", auth, getUserBasic);
 router.get("/profile/:userId", auth, getUserPublicProfile);
 router.post("/profile/:userId/like", auth, toggleProfileLike);
+router.get("/profile/:userId/likes", auth, listProfileLikers);
 
 export default router;

@@ -5,6 +5,7 @@ import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
+import { getIO } from "../socket.js";
 
 // Lazy Cloudinary configuration so it works even if dotenv loads later
 function ensureCloudinaryConfigured() {
@@ -214,7 +215,27 @@ export const toggleProfileLike = async (req, res) => {
       user.profileLikes.push(req.user._id);
     }
     await user.save();
+    // Emit socket event to profile owner for realtime update
+    try {
+      const io = getIO();
+      io.to(`user:${user._id}`).emit('profile:likeUpdated', { userId: String(user._id), profileLikeCount: user.profileLikes.length });
+    } catch {}
     res.json({ liked: !already, profileLikeCount: user.profileLikes.length });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+export const listProfileLikers = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select('profileLikes');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const ids = user.profileLikes || [];
+    if (!ids.length) return res.json({ users: [] });
+    const likers = await User.find({ _id: { $in: ids } }).select('_id name avatarUrl');
+    // Preserve original order (latest push at end) by mapping
+    const map = new Map(likers.map(u => [String(u._id), u]));
+    const ordered = ids.map(id => map.get(String(id))).filter(Boolean);
+    res.json({ users: ordered });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
