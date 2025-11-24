@@ -189,12 +189,30 @@ export const getUserBasic = async (req, res) => {
 export const getUserPublicProfile = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name avatarUrl interests gender bio');
+    const user = await User.findById(userId).select('_id name avatarUrl interests gender bio profileLikes');
     if (!user) return res.status(404).json({ message: 'User not found' });
     // Friend count (accepted requests where this user is either side)
     const friendCount = await FriendRequest.countDocuments({ status: 'accepted', $or: [ { from: userId }, { to: userId } ] });
-    // Optionally could add relationship status relative to requesting user later
-    res.json({ user: { _id: user._id, name: user.name, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio, friendCount } });
+    const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
+    const likedByMe = Array.isArray(user.profileLikes) ? user.profileLikes.some(id => String(id) === String(req.user._id)) : false;
+    res.json({ user: { _id: user._id, name: user.name, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio, friendCount, profileLikeCount, likedByMe } });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+export const toggleProfileLike = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (String(userId) === String(req.user._id)) return res.status(400).json({ message: 'Cannot like your own profile' });
+    const user = await User.findById(userId).select('_id profileLikes');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const already = Array.isArray(user.profileLikes) && user.profileLikes.some(id => String(id) === String(req.user._id));
+    if (already) {
+      user.profileLikes = user.profileLikes.filter(id => String(id) !== String(req.user._id));
+    } else {
+      user.profileLikes.push(req.user._id);
+    }
+    await user.save();
+    res.json({ liked: !already, profileLikeCount: user.profileLikes.length });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
