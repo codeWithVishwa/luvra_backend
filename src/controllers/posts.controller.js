@@ -90,10 +90,12 @@ function uploadBuffer(buffer, options) {
 }
 
 async function canViewPost(viewerId, post) {
-  if (String(post.author) === String(viewerId)) return true;
+  if (!post) return false;
+  const authorId = post.author && post.author._id ? post.author._id : post.author;
+  if (String(authorId) === String(viewerId)) return true;
   if (post.visibility === "public") return true;
   const friendIds = await getFriendIds(viewerId);
-  return friendIds.has(String(post.author));
+  return friendIds.has(String(authorId));
 }
 
 export const uploadPostMedia = async (req, res) => {
@@ -262,7 +264,8 @@ export const deletePost = async (req, res) => {
     const { postId } = req.params;
     const post = await Post.findById(postId);
     if (!post) return res.status(404).json({ message: "Post not found" });
-    if (String(post.author) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
+    const authorId = post.author && post.author._id ? post.author._id : post.author;
+    if (String(authorId) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
     await post.deleteOne();
     await Comment.deleteMany({ post: post._id }).catch(() => {});
     res.json({ ok: true });
@@ -390,7 +393,8 @@ export const deleteComment = async (req, res) => {
     if (!post) return res.status(404).json({ message: "Post not found" });
 
     const isCommentAuthor = comment.author && String(comment.author._id || comment.author) === String(req.user._id);
-    const isPostOwner = String(post.author) === String(req.user._id);
+    const postAuthorId = post.author && post.author._id ? post.author._id : post.author;
+    const isPostOwner = String(postAuthorId) === String(req.user._id);
     if (!isCommentAuthor && !isPostOwner) {
       return res.status(403).json({ message: "Not allowed" });
     }

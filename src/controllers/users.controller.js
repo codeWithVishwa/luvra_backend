@@ -165,13 +165,14 @@ async function viewerCanSeePost(userId, postId) {
   if (!postId) return false;
   const post = await Post.findById(postId).select("author visibility");
   if (!post) return false;
-  if (String(post.author) === String(userId)) return true;
+  const authorId = post.author && post.author._id ? post.author._id : post.author;
+  if (String(authorId) === String(userId)) return true;
   if (post.visibility === "public") return true;
   const friendship = await FriendRequest.exists({
     status: "accepted",
     $or: [
-      { from: userId, to: post.author },
-      { from: post.author, to: userId },
+      { from: userId, to: authorId },
+      { from: authorId, to: userId },
     ],
   });
   return Boolean(friendship);
