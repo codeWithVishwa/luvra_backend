@@ -1,6 +1,6 @@
 import express from "express";
 import auth from "../middleware/auth.js";
-import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser } from "../controllers/users.controller.js";
+import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications } from "../controllers/users.controller.js";
 import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
@@ -8,6 +8,7 @@ const router = express.Router();
 router.get("/search", auth, searchUsers);
 router.post("/request/:userId", auth, sendFriendRequest);
 router.get("/requests", auth, listFriendRequests);
+router.get("/notifications", auth, listNotifications);
 router.post("/requests/:requestId/respond", auth, respondFriendRequest);
 router.get("/contacts", auth, listContacts);
 router.delete("/contacts/:userId", auth, removeFriend);

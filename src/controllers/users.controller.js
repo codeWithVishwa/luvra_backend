@@ -1,6 +1,7 @@
 import User from "../models/user.model.js";
 import FriendRequest from "../models/friendRequest.model.js";
 import Post from "../models/post.model.js";
+import Notification from "../models/notification.model.js";
 import cloudinary from "cloudinary";
 import sharp from "sharp";
 import fs from "fs/promises";
@@ -46,6 +47,120 @@ async function removeFriendshipBetween(a, b) {
   });
 }
 
+async function fetchFriendRequestLists(userId) {
+  const [incoming, outgoing] = await Promise.all([
+    FriendRequest.find({ to: userId, status: "pending" })
+      .populate("from", "_id name email avatarUrl")
+      .sort({ createdAt: -1 }),
+    FriendRequest.find({ from: userId, status: "pending" })
+      .populate("to", "_id name email avatarUrl")
+      .sort({ createdAt: -1 }),
+  ]);
+  return { incoming, outgoing };
+}
+
+async function buildFriendRecommendations(userId) {
+  const me = await User.findById(userId).select("_id interests");
+  if (!me) return [];
+  const myInterests = Array.isArray(me.interests) ? me.interests.filter(Boolean) : [];
+  if (!myInterests.length) return [];
+
+  const [accepted, pending] = await Promise.all([
+    FriendRequest.find({
+      status: "accepted",
+      $or: [{ from: userId }, { to: userId }],
+    }).select("from to"),
+    FriendRequest.find({
+      status: "pending",
+      $or: [{ from: userId }, { to: userId }],
+    }).select("from to"),
+  ]);
+
+  const exclude = new Set([String(userId)]);
+  const viewerFriends = new Set();
+  const addFriend = (fr) => {
+    const other = String(fr.from) === String(userId) ? String(fr.to) : String(fr.from);
+    viewerFriends.add(other);
+    exclude.add(other);
+  };
+  accepted.forEach(addFriend);
+  pending.forEach((fr) => {
+    exclude.add(String(fr.from) === String(userId) ? String(fr.to) : String(fr.from));
+  });
+
+  const candidates = await User.find({
+    _id: { $nin: Array.from(exclude) },
+    interests: { $in: myInterests },
+  })
+    .select("_id name email avatarUrl interests")
+    .limit(75);
+
+  if (!candidates.length) return [];
+
+  const mySet = new Set(myInterests);
+  const candidateIds = candidates.map((u) => String(u._id));
+  const mutualCounts = candidateIds.reduce((acc, id) => ({ ...acc, [id]: 0 }), {});
+
+  if (viewerFriends.size && candidateIds.length) {
+    const viewerFriendList = Array.from(viewerFriends);
+    const mutualEdges = await FriendRequest.find({
+      status: "accepted",
+      $or: [
+        { from: { $in: candidateIds }, to: { $in: viewerFriendList } },
+        { to: { $in: candidateIds }, from: { $in: viewerFriendList } },
+      ],
+    }).select("from to");
+    mutualEdges.forEach((edge) => {
+      const fromId = String(edge.from);
+      const toId = String(edge.to);
+      if (candidateIds.includes(fromId) && viewerFriends.has(toId)) {
+        mutualCounts[fromId] += 1;
+      } else if (candidateIds.includes(toId) && viewerFriends.has(fromId)) {
+        mutualCounts[toId] += 1;
+      }
+    });
+  }
+
+  return candidates
+    .map((user) => {
+      const overlap = (user.interests || []).reduce((acc, val) => acc + (mySet.has(val) ? 1 : 0), 0);
+      return {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        interests: user.interests,
+        overlap,
+        mutualFriendCount: mutualCounts[String(user._id)] || 0,
+      };
+    })
+    .filter((entry) => entry.overlap > 0 || entry.mutualFriendCount > 0)
+    .sort(
+      (a, b) =>
+        b.mutualFriendCount - a.mutualFriendCount ||
+        b.overlap - a.overlap ||
+        a.name.localeCompare(b.name)
+    )
+    .slice(0, 15);
+}
+
+function serializeNotification(notification) {
+  return {
+    _id: notification._id,
+    type: notification.type,
+    createdAt: notification.createdAt,
+    readAt: notification.readAt,
+    metadata: notification.metadata || {},
+    actor: notification.actor
+      ? {
+          _id: notification.actor._id,
+          name: notification.actor.name,
+          avatarUrl: notification.actor.avatarUrl,
+        }
+      : null,
+  };
+}
+
 export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
@@ -76,6 +191,19 @@ export const sendFriendRequest = async (req, res) => {
       { $setOnInsert: { from: req.user._id, to, status: "pending" } },
       { upsert: true, new: true }
     );
+    await Notification.findOneAndUpdate(
+      { user: to, type: 'friend_request', 'metadata.requestId': fr._id },
+      {
+        user: to,
+        actor: req.user._id,
+        type: 'friend_request',
+        metadata: {
+          requestId: fr._id,
+          message: `${req.user.name || 'Someone'} sent you a friend request`,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).catch(() => {});
     res.status(201).json({ request: fr });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -84,13 +212,30 @@ export const sendFriendRequest = async (req, res) => {
 
 export const listFriendRequests = async (req, res) => {
   try {
-    const incoming = await FriendRequest.find({ to: req.user._id, status: "pending" })
-      .populate("from", "_id name email avatarUrl")
-      .sort({ createdAt: -1 });
-    const outgoing = await FriendRequest.find({ from: req.user._id, status: "pending" })
-      .populate("to", "_id name email avatarUrl")
-      .sort({ createdAt: -1 });
+    const { incoming, outgoing } = await fetchFriendRequestLists(req.user._id);
     res.json({ incoming, outgoing });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listNotifications = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 40, 100);
+    const [requests, notifications, recommendations] = await Promise.all([
+      fetchFriendRequestLists(req.user._id),
+      Notification.find({ user: req.user._id })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .populate('actor', '_id name avatarUrl'),
+      buildFriendRecommendations(req.user._id),
+    ]);
+    res.json({
+      incoming: requests.incoming,
+      outgoing: requests.outgoing,
+      notifications: notifications.map(serializeNotification),
+      recommendations,
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -106,6 +251,7 @@ export const respondFriendRequest = async (req, res) => {
 
     fr.status = action === "accept" ? "accepted" : "declined";
     await fr.save();
+    await Notification.deleteMany({ type: 'friend_request', 'metadata.requestId': fr._id }).catch(() => {});
 
     res.json({ request: fr });
   } catch (e) {
@@ -410,43 +556,8 @@ export const unblockUser = async (req, res) => {
 // Recommend friends based on overlapping interests and not already connected or pending
 export const recommendFriends = async (req, res) => {
   try {
-    const me = await User.findById(req.user._id).select('_id interests');
-    if (!me) return res.status(404).json({ message: 'User not found' });
-    const myInterests = Array.isArray(me.interests) ? me.interests.filter(Boolean) : [];
-    if (myInterests.length === 0) return res.json({ users: [] });
-
-    // Build exclusion list: self, accepted friends, pending requests
-    const accepted = await FriendRequest.find({
-      status: 'accepted',
-      $or: [ { from: req.user._id }, { to: req.user._id } ]
-    }).select('from to');
-    const pending = await FriendRequest.find({
-      status: 'pending',
-      $or: [ { from: req.user._id }, { to: req.user._id } ]
-    }).select('from to');
-    const exclude = new Set([ String(req.user._id) ]);
-    const addEx = (fr) => {
-      exclude.add(String(fr.from) === String(req.user._id) ? String(fr.to) : String(fr.from));
-    };
-    accepted.forEach(addEx); pending.forEach(addEx);
-
-    // Initial candidate fetch: any overlap
-    const candidates = await User.find({
-      _id: { $nin: Array.from(exclude) },
-      interests: { $in: myInterests }
-    }).select('_id name email avatarUrl interests').limit(75);
-
-    const mySet = new Set(myInterests);
-    const scored = candidates.map(u => {
-      const overlap = (u.interests || []).reduce((acc, val) => acc + (mySet.has(val) ? 1 : 0), 0);
-      return { user: u, overlap };
-    })
-    .filter(s => s.overlap > 0)
-    .sort((a,b) => b.overlap - a.overlap || a.user.name.localeCompare(b.user.name))
-    .slice(0, 15)
-    .map(s => ({ _id: s.user._id, name: s.user.name, email: s.user.email, avatarUrl: s.user.avatarUrl, overlap: s.overlap, interests: s.user.interests }));
-
-    res.json({ users: scored });
+    const users = await buildFriendRecommendations(req.user._id);
+    res.json({ users });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

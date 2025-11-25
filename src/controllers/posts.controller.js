@@ -3,6 +3,7 @@ import Post from "../models/post.model.js";
 import FriendRequest from "../models/friendRequest.model.js";
 import User from "../models/user.model.js";
 import Comment from "../models/comment.model.js";
+import Notification from "../models/notification.model.js";
 
 function ensureCloudinaryConfigured() {
   const cfg = cloudinary.v2.config();
@@ -273,7 +274,9 @@ export const deletePost = async (req, res) => {
 export const listPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
-    const post = await Post.findById(postId).select("author visibility");
+    const post = await Post.findById(postId)
+      .select("author visibility media caption")
+      .populate("author", "_id name avatarUrl");
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
 
@@ -327,6 +330,42 @@ export const addComment = async (req, res) => {
       { path: "author", select: "_id name avatarUrl" },
       { path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } },
     ]);
+
+    const mentionMatches = Array.from(new Set((text.match(/@([\w]+)/g) || []).map((token) => token.slice(1).toLowerCase())));
+    if (mentionMatches.length) {
+      const mentionedUsers = await User.find({ nameLower: { $in: mentionMatches } }).select("_id");
+      const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
+      const baseMetadata = {
+        commentId: comment._id,
+        postId: post._id,
+        postOwnerId: post.author?._id || post.author,
+        snippet: text.slice(0, 140),
+        postPreview: {
+          authorId: post.author?._id || post.author,
+          authorName: post.author?.name,
+          authorAvatar: post.author?.avatarUrl,
+          caption: post.caption,
+          media: previewMedia,
+        },
+      };
+      await Promise.all(
+        mentionedUsers
+          .filter((mentioned) => String(mentioned._id) !== String(req.user._id))
+          .map((mentioned) =>
+            Notification.findOneAndUpdate(
+              { user: mentioned._id, type: 'comment_mention', 'metadata.commentId': comment._id },
+              {
+                user: mentioned._id,
+                actor: req.user._id,
+                type: 'comment_mention',
+                metadata: { ...baseMetadata, mentionedUserId: mentioned._id },
+              },
+              { upsert: true, setDefaultsOnInsert: true }
+            ).catch(() => {})
+          )
+      );
+    }
+
     const populated = comment;
     res.status(201).json({ comment: serializeComment(populated) });
   } catch (e) {
