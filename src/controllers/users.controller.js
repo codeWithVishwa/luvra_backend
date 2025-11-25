@@ -46,19 +46,6 @@ async function removeFriendshipBetween(a, b) {
   });
 }
 
-async function areFriends(userId, otherId) {
-  if (!userId || !otherId) return false;
-  if (String(userId) === String(otherId)) return true;
-  const fr = await FriendRequest.findOne({
-    status: "accepted",
-    $or: [
-      { from: userId, to: otherId },
-      { from: otherId, to: userId },
-    ],
-  }).select("_id");
-  return !!fr;
-}
-
 export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
@@ -274,14 +261,39 @@ export const getUserPublicProfile = async (req, res) => {
     const { userId } = req.params;
     const user = await User.findById(userId).select('_id name avatarUrl interests bio profileLikes isPrivate');
     if (!user) return res.status(404).json({ message: 'User not found' });
-    // Friend count (accepted requests where this user is either side)
-    const friendCount = await FriendRequest.countDocuments({ status: 'accepted', $or: [ { from: userId }, { to: userId } ] });
+    const viewerId = req.user._id;
+    const [targetFriendships, viewerFriendships, viewerProfile, postCount] = await Promise.all([
+      FriendRequest.find({ status: 'accepted', $or: [ { from: userId }, { to: userId } ] }).select('from to'),
+      FriendRequest.find({ status: 'accepted', $or: [ { from: viewerId }, { to: viewerId } ] }).select('from to'),
+      User.findById(viewerId).select('interests'),
+      Post.countDocuments({ author: userId }),
+    ]);
+    const friendCount = targetFriendships.length;
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const likedByMe = Array.isArray(user.profileLikes) ? user.profileLikes.some(id => String(id) === String(req.user._id)) : false;
-    const postCount = await Post.countDocuments({ author: userId });
     const viewerIsOwner = String(userId) === String(req.user._id);
-    const isFriend = await areFriends(req.user._id, userId);
+    const toIdStrings = (docs, ownerId) => docs.map((fr) => String(fr.from) === String(ownerId) ? String(fr.to) : String(fr.from));
+    const viewerFriendIds = toIdStrings(viewerFriendships, viewerId);
+    const targetFriendIds = toIdStrings(targetFriendships, userId);
+    const targetFriendSet = new Set(targetFriendIds.map(String));
+    const viewerFriendSet = new Set(viewerFriendIds.map(String));
+    const isFriend = targetFriendSet.has(String(viewerId));
     const canViewPosts = viewerIsOwner || !user.isPrivate || isFriend;
+    const mutualIds = Array.from(viewerFriendSet).filter((id) => id !== String(userId) && targetFriendSet.has(id));
+    const uniqueMutualIds = Array.from(new Set(mutualIds));
+    const mutualPreviewIds = uniqueMutualIds.slice(0, 6);
+    let mutualFriends = [];
+    if (mutualPreviewIds.length) {
+      const docs = await User.find({ _id: { $in: mutualPreviewIds } }).select('_id name avatarUrl');
+      const map = new Map(docs.map((doc) => [String(doc._id), doc]));
+      mutualFriends = mutualPreviewIds.map((id) => map.get(String(id))).filter(Boolean);
+    }
+    const viewerInterests = Array.isArray(viewerProfile?.interests) ? viewerProfile.interests.filter(Boolean) : [];
+    const viewerInterestSet = new Set(viewerInterests.map((item) => String(item).toLowerCase()));
+    const sharedInterestsRaw = Array.isArray(user.interests) ? user.interests.filter(Boolean) : [];
+    const sharedInterests = viewerInterestSet.size
+      ? sharedInterestsRaw.filter((interest) => viewerInterestSet.has(String(interest).toLowerCase()))
+      : [];
     res.json({ user: {
       _id: user._id,
       name: user.name,
@@ -294,6 +306,9 @@ export const getUserPublicProfile = async (req, res) => {
       isPrivate: !!user.isPrivate,
       postCount,
       canViewPosts,
+      mutualFriendCount: uniqueMutualIds.length,
+      mutualFriends,
+      sharedInterests: sharedInterests.slice(0, 10),
     } });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
