@@ -1,5 +1,6 @@
 import User from "../models/user.model.js";
 import FriendRequest from "../models/friendRequest.model.js";
+import Post from "../models/post.model.js";
 import cloudinary from "cloudinary";
 import sharp from "sharp";
 import fs from "fs/promises";
@@ -43,6 +44,19 @@ async function removeFriendshipBetween(a, b) {
       { from: b, to: a },
     ],
   });
+}
+
+async function areFriends(userId, otherId) {
+  if (!userId || !otherId) return false;
+  if (String(userId) === String(otherId)) return true;
+  const fr = await FriendRequest.findOne({
+    status: "accepted",
+    $or: [
+      { from: userId, to: otherId },
+      { from: otherId, to: userId },
+    ],
+  }).select("_id");
+  return !!fr;
 }
 
 export const searchUsers = async (req, res) => {
@@ -129,16 +143,39 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests gender bio verified honorScore profileLikes");
+    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests bio verified honorScore profileLikes isPrivate");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
-    res.json({ user: { _id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio, verified: user.verified, honorScore: user.honorScore, profileLikeCount } });
+    const postCount = await Post.countDocuments({ author: user._id });
+    res.json({ user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+      interests: user.interests,
+      bio: user.bio,
+      verified: user.verified,
+      honorScore: user.honorScore,
+      profileLikeCount,
+      isPrivate: !!user.isPrivate,
+      postCount,
+    } });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
 export const updateProfile = async (req, res) => {
   try {
-    const { name, interests, gender, bio } = req.body;
+    const { name, interests, bio } = req.body;
+    const isPrivateProvided = Object.prototype.hasOwnProperty.call(req.body, 'isPrivate');
+    let nextPrivate;
+    if (isPrivateProvided) {
+      const value = req.body.isPrivate;
+      if (typeof value === 'string') {
+        nextPrivate = value === 'true' || value === '1';
+      } else {
+        nextPrivate = !!value;
+      }
+    }
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
     if (name) {
@@ -147,10 +184,29 @@ export const updateProfile = async (req, res) => {
       user.name = name;
     }
     if (Array.isArray(interests)) user.interests = interests.slice(0, 20);
-    if (gender) user.gender = gender;
     if (typeof bio === 'string') user.bio = bio.slice(0, 300);
+    let visibilityChanged = false;
+    if (isPrivateProvided && typeof nextPrivate === 'boolean' && user.isPrivate !== nextPrivate) {
+      user.isPrivate = nextPrivate;
+      visibilityChanged = true;
+    }
     await user.save();
-    res.json({ user: { _id: user._id, name: user.name, email: user.email, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio } });
+    if (visibilityChanged) {
+      await Post.updateMany({ author: user._id }, { visibility: user.isPrivate ? 'private' : 'public' }).catch(() => {});
+    }
+    const postCount = await Post.countDocuments({ author: user._id });
+    res.json({
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        interests: user.interests,
+        bio: user.bio,
+        isPrivate: !!user.isPrivate,
+        postCount,
+      }
+    });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -216,13 +272,29 @@ export const getUserBasic = async (req, res) => {
 export const getUserPublicProfile = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name avatarUrl interests gender bio profileLikes');
+    const user = await User.findById(userId).select('_id name avatarUrl interests bio profileLikes isPrivate');
     if (!user) return res.status(404).json({ message: 'User not found' });
     // Friend count (accepted requests where this user is either side)
     const friendCount = await FriendRequest.countDocuments({ status: 'accepted', $or: [ { from: userId }, { to: userId } ] });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const likedByMe = Array.isArray(user.profileLikes) ? user.profileLikes.some(id => String(id) === String(req.user._id)) : false;
-    res.json({ user: { _id: user._id, name: user.name, avatarUrl: user.avatarUrl, interests: user.interests, gender: user.gender, bio: user.bio, friendCount, profileLikeCount, likedByMe } });
+    const postCount = await Post.countDocuments({ author: userId });
+    const viewerIsOwner = String(userId) === String(req.user._id);
+    const isFriend = await areFriends(req.user._id, userId);
+    const canViewPosts = viewerIsOwner || !user.isPrivate || isFriend;
+    res.json({ user: {
+      _id: user._id,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      interests: user.interests,
+      bio: user.bio,
+      friendCount,
+      profileLikeCount,
+      likedByMe,
+      isPrivate: !!user.isPrivate,
+      postCount,
+      canViewPosts,
+    } });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
