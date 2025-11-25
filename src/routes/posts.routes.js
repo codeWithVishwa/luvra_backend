@@ -4,6 +4,7 @@ import { uploadMedia } from "../middleware/upload.js";
 import {
   createPost,
   addComment,
+  deleteComment,
   deletePost,
   likePost,
   listPostComments,
@@ -23,6 +24,7 @@ router.post("/:postId/like", auth, likePost);
 router.delete("/:postId/like", auth, unlikePost);
 router.get("/:postId/comments", auth, listPostComments);
 router.post("/:postId/comments", auth, addComment);
+router.delete("/:postId/comments/:commentId", auth, deleteComment);
 router.delete("/:postId", auth, deletePost);
 
 export default router;

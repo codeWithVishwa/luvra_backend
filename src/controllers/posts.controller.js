@@ -54,6 +54,14 @@ function serializePost(post, viewerId) {
 }
 
 function serializeComment(comment) {
+  const parentId = comment.parent ? String(comment.parent._id || comment.parent) : null;
+  const parentAuthor = comment.parent && comment.parent.author
+    ? {
+        _id: comment.parent.author._id,
+        name: comment.parent.author.name,
+        avatarUrl: comment.parent.author.avatarUrl,
+      }
+    : null;
   return {
     _id: comment._id,
     text: comment.text,
@@ -65,6 +73,8 @@ function serializeComment(comment) {
           avatarUrl: comment.author.avatarUrl,
         }
       : null,
+    parentId,
+    parentAuthor,
   };
 }
 
@@ -276,6 +286,7 @@ export const listPostComments = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate("author", "_id name avatarUrl")
+      .populate({ path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } })
       .exec();
 
     const serialized = comments.map(serializeComment);
@@ -291,20 +302,58 @@ export const addComment = async (req, res) => {
     const { postId } = req.params;
     const text = typeof req.body.text === "string" ? req.body.text.trim().slice(0, 500) : "";
     if (!text) return res.status(400).json({ message: "Comment cannot be empty" });
+    const rawParentId = typeof req.body.parentId === "string" ? req.body.parentId.trim() : "";
 
     const post = await Post.findById(postId).select("author visibility");
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
 
+    let parentId = null;
+    if (rawParentId) {
+      const parentComment = await Comment.findOne({ _id: rawParentId, post: post._id }).select("_id parent");
+      if (!parentComment) return res.status(404).json({ message: "Parent comment not found" });
+      parentId = parentComment.parent ? parentComment.parent : parentComment._id;
+    }
+
     const comment = await Comment.create({
       post: post._id,
       author: req.user._id,
       text,
+      parent: parentId,
     });
 
     await Post.updateOne({ _id: post._id }, { $inc: { commentCount: 1 } }).catch(() => {});
-    const populated = await comment.populate("author", "_id name avatarUrl");
+    const populated = await comment
+      .populate("author", "_id name avatarUrl")
+      .populate({ path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } });
     res.status(201).json({ comment: serializeComment(populated) });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const deleteComment = async (req, res) => {
+  try {
+    const { postId, commentId } = req.params;
+    const comment = await Comment.findOne({ _id: commentId, post: postId }).populate("author", "_id");
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+    const post = await Post.findById(postId).select("author");
+    if (!post) return res.status(404).json({ message: "Post not found" });
+
+    const isCommentAuthor = comment.author && String(comment.author._id || comment.author) === String(req.user._id);
+    const isPostOwner = String(post.author) === String(req.user._id);
+    if (!isCommentAuthor && !isPostOwner) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
+
+    const replyResult = await Comment.deleteMany({ parent: comment._id });
+    await comment.deleteOne();
+    await Post.updateOne(
+      { _id: post._id },
+      { $inc: { commentCount: -(1 + (replyResult.deletedCount || 0)) } }
+    ).catch(() => {});
+    res.json({ ok: true, removedReplies: replyResult.deletedCount || 0 });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
