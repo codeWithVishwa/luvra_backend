@@ -161,6 +161,46 @@ function serializeNotification(notification) {
   };
 }
 
+async function viewerCanSeePost(userId, postId) {
+  if (!postId) return false;
+  const post = await Post.findById(postId).select("author visibility");
+  if (!post) return false;
+  if (String(post.author) === String(userId)) return true;
+  if (post.visibility === "public") return true;
+  const friendship = await FriendRequest.exists({
+    status: "accepted",
+    $or: [
+      { from: userId, to: post.author },
+      { from: post.author, to: userId },
+    ],
+  });
+  return Boolean(friendship);
+}
+
+async function filterNotificationsForViewer(userId, notifications) {
+  const cache = new Map();
+  const filtered = [];
+  for (const notification of notifications) {
+    if (notification.type === "comment_mention") {
+      const postId = notification.metadata?.postId;
+      if (!postId) {
+        await Notification.deleteOne({ _id: notification._id }).catch(() => {});
+        continue;
+      }
+      if (!cache.has(postId)) {
+        cache.set(postId, viewerCanSeePost(userId, postId));
+      }
+      const allowed = await cache.get(postId);
+      if (!allowed) {
+        await Notification.deleteOne({ _id: notification._id }).catch(() => {});
+        continue;
+      }
+    }
+    filtered.push(notification);
+  }
+  return filtered;
+}
+
 export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
@@ -230,10 +270,11 @@ export const listNotifications = async (req, res) => {
         .populate('actor', '_id name avatarUrl'),
       buildFriendRecommendations(req.user._id),
     ]);
+    const safeNotifications = await filterNotificationsForViewer(req.user._id, notifications);
     res.json({
       incoming: requests.incoming,
       outgoing: requests.outgoing,
-      notifications: notifications.map(serializeNotification),
+      notifications: safeNotifications.map(serializeNotification),
       recommendations,
     });
   } catch (e) {

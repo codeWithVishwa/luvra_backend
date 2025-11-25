@@ -334,36 +334,43 @@ export const addComment = async (req, res) => {
     const mentionMatches = Array.from(new Set((text.match(/@([\w]+)/g) || []).map((token) => token.slice(1).toLowerCase())));
     if (mentionMatches.length) {
       const mentionedUsers = await User.find({ nameLower: { $in: mentionMatches } }).select("_id");
-      const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
-      const baseMetadata = {
-        commentId: comment._id,
-        postId: post._id,
-        postOwnerId: post.author?._id || post.author,
-        snippet: text.slice(0, 140),
-        postPreview: {
-          authorId: post.author?._id || post.author,
-          authorName: post.author?.name,
-          authorAvatar: post.author?.avatarUrl,
-          caption: post.caption,
-          media: previewMedia,
-        },
-      };
-      await Promise.all(
-        mentionedUsers
-          .filter((mentioned) => String(mentioned._id) !== String(req.user._id))
-          .map((mentioned) =>
+      const eligibleMentionedIds = (await Promise.all(
+        mentionedUsers.map(async (mentioned) => {
+          if (String(mentioned._id) === String(req.user._id)) return null;
+          const allowed = await canViewPost(mentioned._id, post);
+          return allowed ? mentioned._id : null;
+        })
+      )).filter(Boolean);
+      if (eligibleMentionedIds.length) {
+        const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
+        const baseMetadata = {
+          commentId: comment._id,
+          postId: post._id,
+          postOwnerId: post.author?._id || post.author,
+          snippet: text.slice(0, 140),
+          postPreview: {
+            authorId: post.author?._id || post.author,
+            authorName: post.author?.name,
+            authorAvatar: post.author?.avatarUrl,
+            caption: post.caption,
+            media: previewMedia,
+          },
+        };
+        await Promise.all(
+          eligibleMentionedIds.map((mentionedId) =>
             Notification.findOneAndUpdate(
-              { user: mentioned._id, type: 'comment_mention', 'metadata.commentId': comment._id },
+              { user: mentionedId, type: 'comment_mention', 'metadata.commentId': comment._id },
               {
-                user: mentioned._id,
+                user: mentionedId,
                 actor: req.user._id,
                 type: 'comment_mention',
-                metadata: { ...baseMetadata, mentionedUserId: mentioned._id },
+                metadata: { ...baseMetadata, mentionedUserId: mentionedId },
               },
               { upsert: true, setDefaultsOnInsert: true }
             ).catch(() => {})
           )
-      );
+        );
+      }
     }
 
     const populated = comment;
