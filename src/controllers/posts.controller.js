@@ -278,7 +278,7 @@ export const listPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
     const post = await Post.findById(postId)
-      .select("author visibility media caption")
+      .select("author visibility media caption createdAt")
       .populate("author", "_id name avatarUrl");
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
@@ -297,7 +297,17 @@ export const listPostComments = async (req, res) => {
 
     const serialized = comments.map(serializeComment);
     const nextCursor = comments.length === limit ? comments[comments.length - 1].createdAt.toISOString() : null;
-    res.json({ comments: serialized, nextCursor });
+    const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
+    const postPreview = {
+      _id: post._id,
+      authorId: post.author?._id || post.author,
+      authorName: post.author?.name,
+      authorAvatar: post.author?.avatarUrl,
+      caption: post.caption,
+      media: previewMedia,
+      createdAt: post.createdAt,
+    };
+    res.json({ comments: serialized, nextCursor, post: postPreview });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
