@@ -323,9 +323,11 @@ export const addComment = async (req, res) => {
     });
 
     await Post.updateOne({ _id: post._id }, { $inc: { commentCount: 1 } }).catch(() => {});
-    const populated = await comment
-      .populate("author", "_id name avatarUrl")
-      .populate({ path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } });
+    await comment.populate([
+      { path: "author", select: "_id name avatarUrl" },
+      { path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } },
+    ]);
+    const populated = comment;
     res.status(201).json({ comment: serializeComment(populated) });
   } catch (e) {
     res.status(500).json({ message: e.message });
