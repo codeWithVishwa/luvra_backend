@@ -310,7 +310,9 @@ export const addComment = async (req, res) => {
     if (!text) return res.status(400).json({ message: "Comment cannot be empty" });
     const rawParentId = typeof req.body.parentId === "string" ? req.body.parentId.trim() : "";
 
-    const post = await Post.findById(postId).select("author visibility");
+    const post = await Post.findById(postId)
+      .select("author visibility caption media createdAt")
+      .populate("author", "_id name avatarUrl");
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
 
@@ -357,6 +359,7 @@ export const addComment = async (req, res) => {
             authorAvatar: post.author?.avatarUrl,
             caption: post.caption,
             media: previewMedia,
+            createdAt: post.createdAt,
           },
         };
         await Promise.all(
