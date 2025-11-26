@@ -31,6 +31,9 @@ const userSchema = new mongoose.Schema(
     // Users who have liked this profile
     profileLikes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    status:{
+      type: String, enum: ["active", "banned", "suspended"], default: 'active'
+    }
   },
   { timestamps: true }
 );
