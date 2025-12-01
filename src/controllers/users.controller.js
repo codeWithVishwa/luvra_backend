@@ -318,9 +318,11 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests bio verified honorScore profileLikes isPrivate");
+    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests bio verified honorScore profileLikes isPrivate followers following");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
+    const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
+    const followingCount = Array.isArray(user.following) ? user.following.length : 0;
     const postCount = await Post.countDocuments({ author: user._id });
     res.json({ user: {
       _id: user._id,
@@ -332,6 +334,8 @@ export const getProfile = async (req, res) => {
       verified: user.verified,
       honorScore: user.honorScore,
       profileLikeCount,
+      followerCount,
+      followingCount,
       isPrivate: !!user.isPrivate,
       postCount,
     } });
@@ -447,55 +451,51 @@ export const getUserBasic = async (req, res) => {
 export const getUserPublicProfile = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name avatarUrl interests bio profileLikes isPrivate');
+    const user = await User.findById(userId).select('_id name avatarUrl interests bio profileLikes isPrivate followers following followRequests');
     if (!user) return res.status(404).json({ message: 'User not found' });
     const viewerId = req.user._id;
-    const [targetFriendships, viewerFriendships, viewerProfile, postCount] = await Promise.all([
-      FriendRequest.find({ status: 'accepted', $or: [ { from: userId }, { to: userId } ] }).select('from to'),
-      FriendRequest.find({ status: 'accepted', $or: [ { from: viewerId }, { to: viewerId } ] }).select('from to'),
+    const [viewerProfile, postCount] = await Promise.all([
       User.findById(viewerId).select('interests'),
       Post.countDocuments({ author: userId }),
     ]);
-    const friendCount = targetFriendships.length;
+
+    const includesId = (list, id) => Array.isArray(list) && list.some((entry) => String(entry) === String(id));
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
-    const likedByMe = Array.isArray(user.profileLikes) ? user.profileLikes.some(id => String(id) === String(req.user._id)) : false;
-    const viewerIsOwner = String(userId) === String(req.user._id);
-    const toIdStrings = (docs, ownerId) => docs.map((fr) => String(fr.from) === String(ownerId) ? String(fr.to) : String(fr.from));
-    const viewerFriendIds = toIdStrings(viewerFriendships, viewerId);
-    const targetFriendIds = toIdStrings(targetFriendships, userId);
-    const targetFriendSet = new Set(targetFriendIds.map(String));
-    const viewerFriendSet = new Set(viewerFriendIds.map(String));
-    const isFriend = targetFriendSet.has(String(viewerId));
-    const canViewPosts = viewerIsOwner || !user.isPrivate || isFriend;
-    const mutualIds = Array.from(viewerFriendSet).filter((id) => id !== String(userId) && targetFriendSet.has(id));
-    const uniqueMutualIds = Array.from(new Set(mutualIds));
-    const mutualPreviewIds = uniqueMutualIds.slice(0, 6);
-    let mutualFriends = [];
-    if (mutualPreviewIds.length) {
-      const docs = await User.find({ _id: { $in: mutualPreviewIds } }).select('_id name avatarUrl');
-      const map = new Map(docs.map((doc) => [String(doc._id), doc]));
-      mutualFriends = mutualPreviewIds.map((id) => map.get(String(id))).filter(Boolean);
-    }
+    const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
+    const followingCount = Array.isArray(user.following) ? user.following.length : 0;
+    const likedByMe = includesId(user.profileLikes, viewerId);
+    const viewerIsOwner = String(userId) === String(viewerId);
+    const viewerFollows = includesId(user.followers, viewerId);
+    const viewerPending = includesId(user.followRequests, viewerId);
+    const targetFollowsViewer = includesId(user.following, viewerId);
+    let followStatus = 'not_following';
+    if (viewerIsOwner) followStatus = 'self';
+    else if (viewerFollows) followStatus = 'following';
+    else if (viewerPending) followStatus = 'requested';
+    else if (targetFollowsViewer) followStatus = 'follow_back';
+    const canViewPosts = viewerIsOwner || !user.isPrivate || viewerFollows;
+
     const viewerInterests = Array.isArray(viewerProfile?.interests) ? viewerProfile.interests.filter(Boolean) : [];
     const viewerInterestSet = new Set(viewerInterests.map((item) => String(item).toLowerCase()));
     const sharedInterestsRaw = Array.isArray(user.interests) ? user.interests.filter(Boolean) : [];
     const sharedInterests = viewerInterestSet.size
       ? sharedInterestsRaw.filter((interest) => viewerInterestSet.has(String(interest).toLowerCase()))
       : [];
+
     res.json({ user: {
       _id: user._id,
       name: user.name,
       avatarUrl: user.avatarUrl,
       interests: user.interests,
       bio: user.bio,
-      friendCount,
+      followerCount,
+      followingCount,
       profileLikeCount,
       likedByMe,
       isPrivate: !!user.isPrivate,
       postCount,
       canViewPosts,
-      mutualFriendCount: uniqueMutualIds.length,
-      mutualFriends,
+      followStatus,
       sharedInterests: sharedInterests.slice(0, 10),
     } });
   } catch (e) { res.status(500).json({ message: e.message }); }
