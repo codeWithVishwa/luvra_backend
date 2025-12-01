@@ -8,6 +8,16 @@ const userSchema = new mongoose.Schema(
   gender: { type: String },
   avatarUrl: { type: String, default: null },
   isPrivate: { type: Boolean, default: false },
+  followers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  following: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  followRequests: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  messageRequests: [
+    {
+      from: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      createdAt: { type: Date, default: Date.now },
+    },
+  ],
+  encryptionPublicKey: { type: String, default: null },
   bio: { type: String, trim: true, maxlength: 300 },
     interests: [String],
     honorScore: { type: Number, default: 50 },
@@ -37,6 +47,11 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+userSchema.index({ followers: 1 });
+userSchema.index({ following: 1 });
+userSchema.index({ followRequests: 1 });
+userSchema.index({ 'messageRequests.from': 1 });
 
 userSchema.pre('save', function(next) {
   if (this.isModified('name') && typeof this.name === 'string') {

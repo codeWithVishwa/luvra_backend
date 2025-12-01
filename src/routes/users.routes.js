@@ -1,6 +1,8 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications } from "../controllers/users.controller.js";
+import { followUser, unfollowUser, getFollowRequests, acceptFollowRequest, rejectFollowRequest } from "../controllers/follow.controller.js";
+import { uploadEncryptionPublicKey, getEncryptionPublicKey } from "../controllers/encryption.controller.js";
 import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
@@ -24,5 +26,12 @@ router.get("/profile/:userId/likes", auth, listProfileLikers);
 router.get("/blocked", auth, listBlockedUsers);
 router.post("/block/:userId", auth, blockUser);
 router.delete("/block/:userId", auth, unblockUser);
+router.post("/:targetUserId/follow", auth, followUser);
+router.post("/:targetUserId/unfollow", auth, unfollowUser);
+router.get("/:userId/follow-requests", auth, getFollowRequests);
+router.post("/:userId/follow-requests/:requesterId/accept", auth, acceptFollowRequest);
+router.post("/:userId/follow-requests/:requesterId/reject", auth, rejectFollowRequest);
+router.post("/me/encryption-key", auth, uploadEncryptionPublicKey);
+router.get("/:id/public-key", auth, getEncryptionPublicKey);
 
 export default router;

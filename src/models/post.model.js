@@ -8,6 +8,7 @@ const mediaSchema = new mongoose.Schema(
     width: { type: Number },
     height: { type: Number },
     durationSeconds: { type: Number },
+    isDelete:{type:Boolean,default:false}
   },
   { _id: false }
 );
@@ -20,6 +21,7 @@ const postSchema = new mongoose.Schema(
     visibility: { type: String, enum: ["public", "private"], default: "public" },
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     commentCount: { type: Number, default: 0 },
+    isDelete:{type:Boolean,default:false}
   },
   { timestamps: true }
 );
