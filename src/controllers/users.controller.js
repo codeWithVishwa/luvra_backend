@@ -207,12 +207,47 @@ export const searchUsers = async (req, res) => {
     const q = (req.query.q || "").trim();
     if (!q) return res.json({ users: [] });
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    const users = await User.find({
-      _id: { $ne: req.user._id },
-      $or: [{ name: regex }, { email: regex }],
-    })
-      .select("_id name email verified avatarUrl")
-      .limit(20);
+    const viewerId = req.user._id;
+    const docs = await User.aggregate([
+      {
+        $match: {
+          _id: { $ne: viewerId },
+          $or: [{ name: regex }, { email: regex }],
+        },
+      },
+      {
+        $project: {
+          name: 1,
+          email: 1,
+          verified: 1,
+          avatarUrl: 1,
+          isPrivate: 1,
+          followerCount: { $size: { $ifNull: ["$followers", []] } },
+          followingCount: { $size: { $ifNull: ["$following", []] } },
+          viewerIsFollower: { $in: [viewerId, { $ifNull: ["$followers", []] }] },
+          viewerRequested: { $in: [viewerId, { $ifNull: ["$followRequests", []] }] },
+          targetFollowsViewer: { $in: [viewerId, { $ifNull: ["$following", []] }] },
+        },
+      },
+      { $limit: 20 },
+    ]);
+    const users = docs.map((doc) => {
+      let followStatus = "not_following";
+      if (doc.viewerIsFollower) followStatus = "following";
+      else if (doc.viewerRequested) followStatus = "requested";
+      else if (doc.targetFollowsViewer) followStatus = "follow_back";
+      return {
+        _id: doc._id,
+        name: doc.name,
+        email: doc.email,
+        verified: doc.verified,
+        avatarUrl: doc.avatarUrl,
+        isPrivate: !!doc.isPrivate,
+        followerCount: doc.followerCount || 0,
+        followingCount: doc.followingCount || 0,
+        followStatus,
+      };
+    });
     res.json({ users });
   } catch (e) {
     res.status(500).json({ message: e.message });

@@ -12,7 +12,9 @@ import {
 	listMessageRequests,
 	acceptMessageRequest,
 	rejectMessageRequest,
+	uploadChatMedia,
 } from "../controllers/chat.controller.js";
+import { uploadMedia } from "../middleware/upload.js";
 
 const router = express.Router();
 
@@ -20,6 +22,7 @@ router.get("/conversations", auth, listConversations);
 router.post("/conversations/:userId", auth, getOrCreateConversation);
 router.get("/conversations/:conversationId/messages", auth, listMessages);
 router.post("/conversations/:conversationId/messages", auth, sendMessage);
+router.post("/conversations/:conversationId/media", auth, uploadMedia.single("media"), uploadChatMedia);
 router.post("/conversations/:conversationId/read", auth, markRead);
 router.delete("/conversations/:conversationId", auth, deleteConversationForUser);
 router.delete("/messages/:messageId", auth, deleteMessage);

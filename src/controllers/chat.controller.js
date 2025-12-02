@@ -2,6 +2,29 @@ import Conversation from "../models/conversation.model.js";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import { getIO } from "../socket.js";
+import cloudinary from "cloudinary";
+
+function ensureCloudinaryConfigured() {
+  const cfg = cloudinary.v2.config();
+  if (!cfg.api_key || !cfg.cloud_name) {
+    cloudinary.v2.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true,
+    });
+  }
+}
+
+function uploadBuffer(buffer, options) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.v2.uploader.upload_stream(options, (err, result) => {
+      if (err) return reject(err);
+      resolve(result);
+    });
+    stream.end(buffer);
+  });
+}
 
 function ensureParticipants(userId, otherId) {
   const a = String(userId);
@@ -262,6 +285,47 @@ export const sendMessage = async (req, res) => {
     }
 
     res.status(201).json({ message });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const uploadChatMedia = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+    const receiverId = convo.participants.find((p) => String(p) !== String(req.user._id));
+    const blockStatus = await getInteractionBlock(req.user._id, receiverId);
+    if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+    if (!req.file) return res.status(400).json({ message: "No file provided" });
+
+    ensureCloudinaryConfigured();
+    const mime = req.file.mimetype || "";
+    const isVideo = mime.startsWith("video/");
+    const isAudio = mime.startsWith("audio/");
+    const mediaType = isAudio ? "audio" : isVideo ? "video" : "image";
+    const resourceType = mediaType === "image" ? "image" : "video";
+    const folder = `luvra/chats/${conversationId}`;
+
+    const result = await uploadBuffer(req.file.buffer, {
+      folder,
+      resource_type: resourceType,
+      overwrite: false,
+    });
+
+    const media = {
+      url: result.secure_url,
+      type: mediaType,
+      publicId: result.public_id,
+      width: result.width,
+      height: result.height,
+      durationSeconds: result.duration ? Math.round(result.duration) : undefined,
+    };
+
+    res.status(201).json({ media });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
