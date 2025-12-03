@@ -752,3 +752,16 @@ export const recommendFriends = async (req, res) => {
     res.status(500).json({ message: e.message });
   }
 };
+
+export const updatePushToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: "Token required" });
+    
+    await User.findByIdAndUpdate(req.user._id, { pushToken: token });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+

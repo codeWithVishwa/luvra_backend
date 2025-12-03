@@ -1,7 +1,8 @@
 import Conversation from "../models/conversation.model.js";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
-import { getIO } from "../socket.js";
+import { getIO, getOnlineUsers } from "../socket.js";
+import { sendPushNotification } from "../utils/expoPush.js";
 import cloudinary from "cloudinary";
 
 function ensureCloudinaryConfigured() {
@@ -284,11 +285,66 @@ export const sendMessage = async (req, res) => {
     await convo.save();
 
     const io = getIO();
+    const onlineUsers = getOnlineUsers();
+    
     if (io) {
       const recipients = convo.participants.filter((p) => String(p) !== String(req.user._id));
-      recipients.forEach((rid) => {
-        io.to(`user:${rid}`).emit("message:new", { conversationId, message });
-      });
+      
+      for (const rid of recipients) {
+        const recipientId = String(rid);
+        
+        // 1. Emit socket event if online
+        io.to(`user:${recipientId}`).emit("message:new", { conversationId, message });
+        
+        // 2. Check if offline or background (simplified: if not in onlineUsers set)
+        // Note: Ideally we'd check if they are actually in the chat screen, but for now "online" means connected to socket.
+        // If they are online but in another screen, they get the socket event and show a toast (handled by frontend).
+        // If they are offline, we send a push.
+        const isOnline = onlineUsers.has(recipientId);
+        
+        if (!isOnline) {
+          const recipient = await User.findById(recipientId).select("pushToken offlineNotifications");
+          
+          if (recipient) {
+            // A. Send Push Notification
+            if (recipient.pushToken) {
+              const senderName = req.user.name || "Someone";
+              const preview = text ? (text.length > 35 ? text.slice(0, 35) + "..." : text) : `[${payloadType}]`;
+              
+              await sendPushNotification(
+                recipient.pushToken,
+                senderName,
+                preview,
+                {
+                  conversationId,
+                  senderId: req.user._id,
+                  type: "chat_message",
+                  senderName
+                }
+              );
+            }
+            
+            // B. Update Offline Queue (for summary later)
+            const existingNotifIndex = recipient.offlineNotifications.findIndex(
+              n => String(n.senderId) === String(req.user._id)
+            );
+            
+            if (existingNotifIndex >= 0) {
+              recipient.offlineNotifications[existingNotifIndex].count += 1;
+              recipient.offlineNotifications[existingNotifIndex].lastMessage = text || `[${payloadType}]`;
+              recipient.offlineNotifications[existingNotifIndex].updatedAt = new Date();
+            } else {
+              recipient.offlineNotifications.push({
+                senderId: req.user._id,
+                count: 1,
+                lastMessage: text || `[${payloadType}]`,
+                updatedAt: new Date()
+              });
+            }
+            await recipient.save();
+          }
+        }
+      }
     }
 
     res.status(201).json({ message });
@@ -414,3 +470,61 @@ export const deleteConversationForUser = async (req, res) => {
     res.status(500).json({ message: e.message });
   }
 };
+
+export const replyFromNotification = async (req, res) => {
+  try {
+    const { conversationId, text } = req.body;
+    if (!conversationId || !text) return res.status(400).json({ message: "Missing fields" });
+
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+    
+    const receiverId = convo.participants.find((p) => String(p) !== String(req.user._id));
+    
+    const messageData = {
+      conversation: conversationId,
+      sender: req.user._id,
+      receiver: receiverId,
+      text: text,
+      type: "text",
+      readBy: [req.user._id],
+    };
+
+    const message = await Message.create(messageData);
+
+    convo.lastMessage = {
+      text: text.length > 50 ? text.slice(0, 50) + "…" : text,
+      sender: req.user._id,
+      at: message.createdAt,
+    };
+    await convo.save();
+
+    const io = getIO();
+    const onlineUsers = getOnlineUsers();
+    
+    if (io) {
+      const rid = String(receiverId);
+      io.to(`user:${rid}`).emit("message:new", { conversationId, message });
+      
+      if (!onlineUsers.has(rid)) {
+        const recipient = await User.findById(rid).select("pushToken offlineNotifications");
+        if (recipient && recipient.pushToken) {
+          const senderName = req.user.name || "Someone";
+          await sendPushNotification(
+            recipient.pushToken,
+            senderName,
+            text,
+            { conversationId, senderId: req.user._id, type: "chat_message", senderName }
+          );
+        }
+      }
+    }
+
+    res.status(201).json({ message });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+

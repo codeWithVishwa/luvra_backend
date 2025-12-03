@@ -13,6 +13,7 @@ import {
 	acceptMessageRequest,
 	rejectMessageRequest,
 	uploadChatMedia,
+  replyFromNotification,
 } from "../controllers/chat.controller.js";
 import { uploadMedia } from "../middleware/upload.js";
 
@@ -31,5 +32,7 @@ router.post("/start/:targetUserId", auth, startChat);
 router.get("/requests", auth, listMessageRequests);
 router.post("/requests/:requesterId/accept", auth, acceptMessageRequest);
 router.post("/requests/:requesterId/reject", auth, rejectMessageRequest);
+
+router.post("/reply-from-notification", auth, replyFromNotification);
 
 export default router;

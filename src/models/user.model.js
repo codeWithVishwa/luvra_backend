@@ -38,6 +38,14 @@ const userSchema = new mongoose.Schema(
     nameLower: { type: String, index: true, unique: true, sparse: true },
     // Presence tracking
     lastActiveAt: { type: Date, default: Date.now, index: true },
+    // Push Notifications
+    pushToken: { type: String, default: null },
+    offlineNotifications: [{
+      senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      count: { type: Number, default: 1 },
+      lastMessage: { type: String },
+      updatedAt: { type: Date, default: Date.now }
+    }],
     // Users who have liked this profile
     profileLikes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
