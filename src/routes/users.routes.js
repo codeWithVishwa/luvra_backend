@@ -1,6 +1,6 @@
 import express from "express";
 import auth from "../middleware/auth.js";
-import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications } from "../controllers/users.controller.js";
+import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications, getChateableUsers } from "../controllers/users.controller.js";
 import { followUser, unfollowUser, getFollowRequests, acceptFollowRequest, rejectFollowRequest } from "../controllers/follow.controller.js";
 import { uploadEncryptionPublicKey, getEncryptionPublicKey } from "../controllers/encryption.controller.js";
 import { upload } from "../middleware/upload.js";
@@ -8,6 +8,7 @@ import { upload } from "../middleware/upload.js";
 const router = express.Router();
 
 router.get("/search", auth, searchUsers);
+router.get("/chateable", auth, getChateableUsers);
 router.post("/request/:userId", auth, sendFriendRequest);
 router.get("/requests", auth, listFriendRequests);
 router.get("/notifications", auth, listNotifications);

@@ -202,6 +202,63 @@ async function filterNotificationsForViewer(userId, notifications) {
   return filtered;
 }
 
+// Get users that current user can chat with (mutual follows or followers/following)
+export const getChateableUsers = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const q = (req.query.q || "").trim().toLowerCase();
+    
+    // Get current user's followers and following
+    const currentUser = await User.findById(userId).select('followers following blockedUsers');
+    if (!currentUser) return res.status(404).json({ message: "User not found" });
+    
+    // Combine followers and following into unique set
+    const followerIds = (currentUser.followers || []).map(id => String(id));
+    const followingIds = (currentUser.following || []).map(id => String(id));
+    const blockedIds = (currentUser.blockedUsers || []).map(id => String(id));
+    
+    // Unique IDs from both lists, excluding blocked users
+    const chateableIds = [...new Set([...followerIds, ...followingIds])]
+      .filter(id => !blockedIds.includes(id));
+    
+    if (chateableIds.length === 0) {
+      return res.json({ users: [] });
+    }
+    
+    // Fetch user details
+    let users = await User.find({
+      _id: { $in: chateableIds },
+    }).select('_id name avatarUrl isPrivate').lean();
+    
+    // Filter by search query if provided
+    if (q) {
+      users = users.filter(u => 
+        (u.name || '').toLowerCase().includes(q)
+      );
+    }
+    
+    // Add relationship info
+    const usersWithRelation = users.map(u => ({
+      ...u,
+      isFollowing: followingIds.includes(String(u._id)),
+      isFollower: followerIds.includes(String(u._id)),
+    }));
+    
+    // Sort: mutual follows first, then by name
+    usersWithRelation.sort((a, b) => {
+      const aMutual = a.isFollowing && a.isFollower;
+      const bMutual = b.isFollowing && b.isFollower;
+      if (aMutual && !bMutual) return -1;
+      if (!aMutual && bMutual) return 1;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    
+    res.json({ users: usersWithRelation });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
