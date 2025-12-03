@@ -687,6 +687,62 @@ export const unblockUser = async (req, res) => {
   }
 };
 
+// Get followers list for a user
+export const getFollowersList = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user._id;
+    
+    const targetUser = await User.findById(userId).select('followers isPrivate');
+    if (!targetUser) return res.status(404).json({ message: "User not found" });
+    
+    // If private account and not the owner, check if current user follows them
+    if (targetUser.isPrivate && String(userId) !== String(currentUserId)) {
+      const isFollowing = targetUser.followers.some(id => String(id) === String(currentUserId));
+      if (!isFollowing) {
+        return res.status(403).json({ message: "This account is private" });
+      }
+    }
+    
+    // Populate followers
+    const followers = await User.find({
+      _id: { $in: targetUser.followers }
+    }).select('_id name avatarUrl').lean();
+    
+    res.json({ users: followers });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+// Get following list for a user
+export const getFollowingList = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user._id;
+    
+    const targetUser = await User.findById(userId).select('following isPrivate followers');
+    if (!targetUser) return res.status(404).json({ message: "User not found" });
+    
+    // If private account and not the owner, check if current user follows them
+    if (targetUser.isPrivate && String(userId) !== String(currentUserId)) {
+      const isFollowing = targetUser.followers.some(id => String(id) === String(currentUserId));
+      if (!isFollowing) {
+        return res.status(403).json({ message: "This account is private" });
+      }
+    }
+    
+    // Populate following
+    const following = await User.find({
+      _id: { $in: targetUser.following }
+    }).select('_id name avatarUrl').lean();
+    
+    res.json({ users: following });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 // Recommend friends based on overlapping interests and not already connected or pending
 export const recommendFriends = async (req, res) => {
   try {
