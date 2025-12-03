@@ -60,33 +60,23 @@ async function fetchFriendRequestLists(userId) {
 }
 
 async function buildFriendRecommendations(userId) {
-  const me = await User.findById(userId).select("_id interests");
+  const me = await User.findById(userId).select("_id interests following");
   if (!me) return [];
   const myInterests = Array.isArray(me.interests) ? me.interests.filter(Boolean) : [];
   if (!myInterests.length) return [];
 
-  const [accepted, pending] = await Promise.all([
-    FriendRequest.find({
-      status: "accepted",
-      $or: [{ from: userId }, { to: userId }],
-    }).select("from to"),
-    FriendRequest.find({
-      status: "pending",
-      $or: [{ from: userId }, { to: userId }],
-    }).select("from to"),
-  ]);
-
+  // Find users I have requested to follow (for private accounts)
+  const requestedUsers = await User.find({ followRequests: userId }).select("_id");
+  
   const exclude = new Set([String(userId)]);
-  const viewerFriends = new Set();
-  const addFriend = (fr) => {
-    const other = String(fr.from) === String(userId) ? String(fr.to) : String(fr.from);
-    viewerFriends.add(other);
-    exclude.add(other);
-  };
-  accepted.forEach(addFriend);
-  pending.forEach((fr) => {
-    exclude.add(String(fr.from) === String(userId) ? String(fr.to) : String(fr.from));
-  });
+  
+  // Exclude people I already follow
+  if (Array.isArray(me.following)) {
+    me.following.forEach(id => exclude.add(String(id)));
+  }
+
+  // Exclude people I have requested to follow
+  requestedUsers.forEach(u => exclude.add(String(u._id)));
 
   const candidates = await User.find({
     _id: { $nin: Array.from(exclude) },

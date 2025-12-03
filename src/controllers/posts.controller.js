@@ -1,6 +1,5 @@
 import cloudinary from "cloudinary";
 import Post from "../models/post.model.js";
-import FriendRequest from "../models/friendRequest.model.js";
 import User from "../models/user.model.js";
 import Comment from "../models/comment.model.js";
 import Notification from "../models/notification.model.js";
@@ -20,15 +19,12 @@ function ensureCloudinaryConfigured() {
 const MAX_VIDEO_SECONDS = 20;
 const MAX_MEDIA_PER_POST = 4;
 
-async function getFriendIds(userId) {
-  const accepted = await FriendRequest.find({
-    status: "accepted",
-    $or: [{ from: userId }, { to: userId }],
-  }).select("from to");
+async function getFollowingIds(userId) {
+  const user = await User.findById(userId).select("following");
   const ids = new Set();
-  accepted.forEach((fr) => {
-    ids.add(String(fr.from) === String(userId) ? String(fr.to) : String(fr.from));
-  });
+  if (user && Array.isArray(user.following)) {
+    user.following.forEach(id => ids.add(String(id)));
+  }
   return ids;
 }
 
@@ -94,8 +90,9 @@ async function canViewPost(viewerId, post) {
   const authorId = post.author && post.author._id ? post.author._id : post.author;
   if (String(authorId) === String(viewerId)) return true;
   if (post.visibility === "public") return true;
-  const friendIds = await getFriendIds(viewerId);
-  return friendIds.has(String(authorId));
+  // For private posts, viewer must be following the author
+  const followingIds = await getFollowingIds(viewerId);
+  return followingIds.has(String(authorId));
 }
 
 export const uploadPostMedia = async (req, res) => {
@@ -176,15 +173,14 @@ export const listFeedPosts = async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
-    const friendIds = await getFriendIds(req.user._id);
-    const filters = [
-      { visibility: "public" },
-      { author: req.user._id },
-    ];
-    if (friendIds.size) {
-      filters.push({ visibility: "private", author: { $in: Array.from(friendIds) } });
-    }
-    const query = Post.find({ $or: filters });
+    
+    // Feed consists of posts from people I follow + my own posts
+    const followingIds = await getFollowingIds(req.user._id);
+    const authors = Array.from(followingIds);
+    authors.push(req.user._id);
+
+    const query = Post.find({ author: { $in: authors } });
+    
     if (before && !isNaN(before.getTime())) {
       query.where("createdAt").lt(before);
     }
@@ -205,12 +201,15 @@ export const listUserPosts = async (req, res) => {
     const { userId } = req.params;
     const target = await User.findById(userId).select("_id isPrivate");
     if (!target) return res.status(404).json({ message: "User not found" });
+    
+    // If target is private and not me, I must be following them to see posts
     if (String(userId) !== String(req.user._id) && target.isPrivate) {
-      const friendIds = await getFriendIds(target._id);
-      if (!friendIds.has(String(req.user._id))) {
+      const followingIds = await getFollowingIds(req.user._id);
+      if (!followingIds.has(String(target._id))) {
         return res.status(403).json({ message: "Posts are private" });
       }
     }
+    
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
     const query = Post.find({ author: userId });
