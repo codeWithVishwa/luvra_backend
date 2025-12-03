@@ -13,7 +13,8 @@ const conversationSchema = new mongoose.Schema(
     sessionKeyVersion: { type: Number, default: 1 },
     lastMessage: {
       type: {
-        ciphertextPreview: { type: String },
+        text: { type: String },
+        ciphertextPreview: { type: String }, // Legacy field
         sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         at: { type: Date },
       },

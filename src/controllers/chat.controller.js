@@ -238,7 +238,7 @@ export const listMessages = async (req, res) => {
     const msgs = await Message.find(q)
       .sort({ createdAt: -1 })
       .limit(Number(limit))
-      .select("ciphertext nonce payloadType sender receiver createdAt deleted deletedAt readBy");
+      .select("text type mediaUrl mediaDuration sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType");
     res.json({ messages: msgs.reverse() });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -248,8 +248,8 @@ export const listMessages = async (req, res) => {
 export const sendMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { ciphertext, nonce, payloadType = "text" } = req.body;
-    if (!ciphertext || !nonce) return res.status(400).json({ message: "Ciphertext and nonce required" });
+    const { text, payloadType = "text", media } = req.body;
+    if (!text && !media) return res.status(400).json({ message: "Text or media required" });
 
     const convo = await Conversation.findById(conversationId);
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
@@ -259,18 +259,25 @@ export const sendMessage = async (req, res) => {
     const blockStatus = await getInteractionBlock(req.user._id, receiverId);
     if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
 
-    const message = await Message.create({
+    const messageData = {
       conversation: conversationId,
       sender: req.user._id,
       receiver: receiverId,
-      ciphertext,
-      nonce,
-      payloadType,
+      text: text || "",
+      type: payloadType,
       readBy: [req.user._id],
-    });
+    };
+
+    // Include media if provided
+    if (media && media.url) {
+      messageData.mediaUrl = media.url;
+      if (media.duration) messageData.mediaDuration = media.duration;
+    }
+
+    const message = await Message.create(messageData);
 
     convo.lastMessage = {
-      ciphertextPreview: ciphertextPreview(ciphertext),
+      text: text ? (text.length > 50 ? text.slice(0, 50) + "…" : text) : `[${payloadType}]`,
       sender: req.user._id,
       at: message.createdAt,
     };
@@ -363,12 +370,15 @@ export const deleteMessage = async (req, res) => {
     msg.deleted = true;
     msg.deletedAt = new Date();
     msg.deletedBy = req.user._id;
+    msg.text = "";
+    msg.mediaUrl = null;
+    // Clear legacy encryption fields if present
     msg.ciphertext = "";
     msg.nonce = "";
     await msg.save();
 
     if (convo.lastMessage && String(convo.lastMessage.sender) === String(req.user._id)) {
-      convo.lastMessage.ciphertextPreview = "[deleted]";
+      convo.lastMessage.text = "[deleted]";
       convo.lastMessage.at = new Date();
       await convo.save();
     }
