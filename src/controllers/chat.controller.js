@@ -236,16 +236,48 @@ export const listMessages = async (req, res) => {
     }
     const q = { conversation: conversationId };
     if (before) q.createdAt = { $lt: new Date(before) };
-    const msgs = await Message.find(q)
+    
+    let msgs = await Message.find(q)
       .sort({ createdAt: -1 })
       .limit(Number(limit))
       .select("text type mediaUrl mediaDuration post sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType")
       .populate({
         path: "post",
-        select: "caption media author",
+        select: "caption media author visibility",
         populate: { path: "author", select: "name avatarUrl" }
-      });
-    res.json({ messages: msgs.reverse() });
+      })
+      .lean();
+
+    msgs = msgs.reverse();
+
+    // Privacy Check: Hide private posts if viewer doesn't follow author
+    const viewerId = String(req.user._id);
+    const privatePostAuthors = new Set();
+
+    for (const msg of msgs) {
+      if (msg.post && msg.post.visibility === 'private' && msg.post.author && String(msg.post.author._id) !== viewerId) {
+        privatePostAuthors.add(String(msg.post.author._id));
+      }
+    }
+
+    if (privatePostAuthors.size > 0) {
+      const following = await User.find({ 
+        _id: { $in: Array.from(privatePostAuthors) }, 
+        followers: req.user._id 
+      }).select('_id');
+      
+      const followingSet = new Set(following.map(u => String(u._id)));
+
+      for (const msg of msgs) {
+        if (msg.post && msg.post.visibility === 'private' && msg.post.author && String(msg.post.author._id) !== viewerId) {
+          if (!followingSet.has(String(msg.post.author._id))) {
+             msg.post = { unavailable: true };
+          }
+        }
+      }
+    }
+
+    res.json({ messages: msgs });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -288,7 +320,7 @@ export const sendMessage = async (req, res) => {
     if (postId) {
       await message.populate({
         path: "post",
-        select: "caption media author",
+        select: "caption media author visibility",
         populate: { path: "author", select: "name avatarUrl" }
       });
     }
@@ -309,8 +341,17 @@ export const sendMessage = async (req, res) => {
       for (const rid of recipients) {
         const recipientId = String(rid);
         
+        // Check privacy for recipient if post is private
+        let messageToSend = message.toObject();
+        if (messageToSend.post && messageToSend.post.visibility === 'private' && String(messageToSend.post.author?._id) !== recipientId) {
+           const isFollowing = await User.exists({ _id: messageToSend.post.author._id, followers: recipientId });
+           if (!isFollowing) {
+              messageToSend.post = { unavailable: true };
+           }
+        }
+
         // 1. Emit socket event if online
-        io.to(`user:${recipientId}`).emit("message:new", { conversationId, message });
+        io.to(`user:${recipientId}`).emit("message:new", { conversationId, message: messageToSend });
         
         // 2. Check if offline or background (simplified: if not in onlineUsers set)
         // Note: Ideally we'd check if they are actually in the chat screen, but for now "online" means connected to socket.
