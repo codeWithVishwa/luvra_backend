@@ -8,11 +8,12 @@ const messageSchema = new mongoose.Schema(
     text: { type: String, default: "" },
     type: {
       type: String,
-      enum: ["text", "image", "video", "audio"],
+      enum: ["text", "image", "video", "audio", "post"],
       default: "text",
     },
     mediaUrl: { type: String, default: null },
     mediaDuration: { type: Number, default: null },
+    post: { type: mongoose.Schema.Types.ObjectId, ref: "Post", default: null },
     readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     deleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },

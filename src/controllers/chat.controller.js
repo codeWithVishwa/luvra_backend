@@ -239,7 +239,12 @@ export const listMessages = async (req, res) => {
     const msgs = await Message.find(q)
       .sort({ createdAt: -1 })
       .limit(Number(limit))
-      .select("text type mediaUrl mediaDuration sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType");
+      .select("text type mediaUrl mediaDuration post sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType")
+      .populate({
+        path: "post",
+        select: "caption media author",
+        populate: { path: "author", select: "name avatarUrl" }
+      });
     res.json({ messages: msgs.reverse() });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -249,8 +254,8 @@ export const listMessages = async (req, res) => {
 export const sendMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { text, payloadType = "text", media } = req.body;
-    if (!text && !media) return res.status(400).json({ message: "Text or media required" });
+    const { text, payloadType = "text", media, postId } = req.body;
+    if (!text && !media && !postId) return res.status(400).json({ message: "Text, media, or post required" });
 
     const convo = await Conversation.findById(conversationId);
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
@@ -268,6 +273,10 @@ export const sendMessage = async (req, res) => {
       type: payloadType,
       readBy: [req.user._id],
     };
+
+    if (postId) {
+      messageData.post = postId;
+    }
 
     // Include media if provided
     if (media && media.url) {
