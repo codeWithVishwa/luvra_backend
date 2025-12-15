@@ -285,6 +285,13 @@ export const sendMessage = async (req, res) => {
     }
 
     const message = await Message.create(messageData);
+    if (postId) {
+      await message.populate({
+        path: "post",
+        select: "caption media author",
+        populate: { path: "author", select: "name avatarUrl" }
+      });
+    }
 
     convo.lastMessage = {
       text: text ? (text.length > 50 ? text.slice(0, 50) + "…" : text) : `[${payloadType}]`,
