@@ -259,7 +259,7 @@ export const searchUsers = async (req, res) => {
       {
         $match: {
           _id: { $ne: viewerId },
-          $or: [{ name: regex }, { email: regex }],
+          name: regex,
         },
       },
       {

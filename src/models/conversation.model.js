@@ -14,6 +14,7 @@ const conversationSchema = new mongoose.Schema(
     lastMessage: {
       type: {
         text: { type: String },
+        type: { type: String }, // 'text', 'image', 'video', 'audio', 'post'
         ciphertextPreview: { type: String }, // Legacy field
         sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         at: { type: Date },
