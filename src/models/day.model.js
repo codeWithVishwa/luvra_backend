@@ -10,7 +10,7 @@ const daySchema = new mongoose.Schema(
       durationSeconds: { type: Number },
     },
     viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    expiresAt: { type: Date, required: true, index: true },
+    expiresAt: { type: Date, required: true },
   },
   { timestamps: true }
 );

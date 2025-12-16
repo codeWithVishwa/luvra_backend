@@ -37,7 +37,7 @@ conversationSchema.pre("validate", function (next) {
 });
 
 conversationSchema.index({ participants: 1 });
-conversationSchema.index({ directPairKey: 1 });
+// Unique index already created by `unique: true` on directPairKey; no need to add another.
 conversationSchema.index({ updatedAt: -1 });
 
 export default mongoose.model("Conversation", conversationSchema);
