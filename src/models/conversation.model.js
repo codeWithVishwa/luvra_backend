@@ -19,7 +19,7 @@ const conversationSchema = new mongoose.Schema(
         sender: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         at: { type: Date },
       },
-      default: null,
+      // No default; leave undefined unless explicitly set
     },
     deletedFor: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
