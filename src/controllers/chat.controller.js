@@ -1,6 +1,8 @@
 import Conversation from "../models/conversation.model.js";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
+import Post from "../models/post.model.js";
+import mongoose from "mongoose";
 import { getIO, getOnlineUsers } from "../socket.js";
 import { sendPushNotification } from "../utils/expoPush.js";
 import cloudinary from "cloudinary";
@@ -289,6 +291,18 @@ export const sendMessage = async (req, res) => {
     const { text, payloadType = "text", media, postId } = req.body;
     if (!text && !media && !postId) return res.status(400).json({ message: "Text, media, or post required" });
 
+    // Validate post share
+    let postDoc = null;
+    if (payloadType === "post") {
+      if (!postId || !mongoose.Types.ObjectId.isValid(postId)) {
+        return res.status(400).json({ message: "Invalid postId" });
+      }
+      postDoc = await Post.findById(postId).populate("author", "name avatarUrl isPrivate followers");
+      if (!postDoc) {
+        return res.status(404).json({ message: "Post not found" });
+      }
+    }
+
     const convo = await Conversation.findById(conversationId);
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
@@ -306,8 +320,8 @@ export const sendMessage = async (req, res) => {
       readBy: [req.user._id],
     };
 
-    if (postId) {
-      messageData.post = postId;
+    if (postDoc) {
+      messageData.post = postDoc._id;
     }
 
     // Include media if provided
@@ -317,7 +331,7 @@ export const sendMessage = async (req, res) => {
     }
 
     const message = await Message.create(messageData);
-    if (postId) {
+    if (postDoc) {
       await message.populate({
         path: "post",
         select: "caption media author visibility",
