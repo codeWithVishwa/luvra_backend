@@ -341,7 +341,7 @@ export const sendMessage = async (req, res) => {
 
     convo.lastMessage = {
       text: text ? (text.length > 50 ? text.slice(0, 50) + "…" : text) : `[${payloadType}]`,
-      type: payloadType,
+      msgType: payloadType,
       sender: req.user._id,
       at: message.createdAt,
     };
