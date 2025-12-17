@@ -128,7 +128,7 @@ export const listMessageRequests = async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
       .select("messageRequests")
-      .populate("messageRequests.from", "name avatarUrl isPrivate");
+      .populate("messageRequests.from", "name nickname avatarUrl isPrivate");
     res.json({ requests: user?.messageRequests || [] });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -206,7 +206,7 @@ export const listConversations = async (req, res) => {
     const convos = await Conversation.find({ participants: req.user._id, deletedFor: { $ne: req.user._id } })
       .sort({ updatedAt: -1 })
       .limit(50)
-      .populate("participants", "_id name email avatarUrl verified");
+      .populate("participants", "_id name nickname email avatarUrl verified");
     const userId = String(req.user._id);
     const withUnread = await Promise.all(
       convos.map(async (c) => {

@@ -4,6 +4,7 @@ import crypto from "crypto";
 import User from "../models/user.model.js";
 import { sendEmail, buildApiUrl, buildAppUrl, getEmailHealth } from "../utils/email.js";
 import { generateVerifyEmailTemplate, generateResetPasswordTemplate, generateVerifyEmailOtpTemplate, generateResetPasswordOtpTemplate } from "../utils/emailTemplates.js";
+import { suggestUsernames } from "../utils/nameSuggestions.js";
 
 const htmlPage = ({ title, heading, body, success, ctaLink, ctaText }) => `<!doctype html>
 <html lang="en">
@@ -52,7 +53,8 @@ const htmlPage = ({ title, heading, body, success, ctaLink, ctaText }) => `<!doc
 export const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
-    if (!name || !email || !password)
+    const cleanName = (name || '').trim();
+    if (!cleanName || !email || !password)
       return res.status(400).json({ message: "All fields are required" });
     if (password.length < 8)
       return res.status(400).json({ message: "Password must be at least 8 characters long" });
@@ -77,13 +79,16 @@ export const register = async (req, res) => {
         subject: "Your verification code",
         html: generateVerifyEmailOtpTemplate(existingUser.name || name, otp),
       }).catch(e => console.error("Email resend failed:", e.message));
-      return res.status(200).json({ message: "Email already registered but not verified. Verification code resent.", emailAlreadyRegistered: true, user: { _id: existingUser._id, name: existingUser.name, email: existingUser.email, verified: existingUser.verified } });
+      return res.status(200).json({ message: "Email already registered but not verified. Verification code resent.", emailAlreadyRegistered: true, user: { _id: existingUser._id, name: existingUser.name, email: existingUser.email, verified: existingUser.verified, nickname: existingUser.nickname } });
     }
-    const existingName = await User.findOne({ nameLower: name.toLowerCase() }).select('_id');
-    if (existingName) return res.status(409).json({ message: "Username already taken" });
+    const existingName = await User.findOne({ nameLower: cleanName.toLowerCase() }).select('_id');
+    if (existingName) {
+      const suggestions = await suggestUsernames(cleanName);
+      return res.status(409).json({ message: "Username already taken", suggestions });
+    }
 
     const hashed = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, password: hashed });
+    const user = await User.create({ name: cleanName, email, password: hashed });
 
     // Generate OTP for email verification (6-digit)
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -95,15 +100,16 @@ export const register = async (req, res) => {
     sendEmail({
       to: email,
       subject: "Your verification code",
-      html: generateVerifyEmailOtpTemplate(name, otp),
+      html: generateVerifyEmailOtpTemplate(cleanName, otp),
     }).catch(e => console.error("Email send failed:", e.message));
 
     // Important: never return password hashes to client
-    const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
+    const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified, nickname: user.nickname };
     res.status(201).json({ message: "Account created successfully. Enter the verification code sent to your email.", user: safeUser, created: true });
   } catch (error) {
     if (error?.code === 11000 && error?.keyPattern?.nameLower) {
-      return res.status(409).json({ message: 'Username already taken' });
+      const suggestions = await suggestUsernames(req.body?.name);
+      return res.status(409).json({ message: 'Username already taken', suggestions });
     }
     res.status(500).json({ error: error.message });
   }
@@ -132,12 +138,12 @@ export const login = async (req, res) => {
         subject: "Your verification code",
         html: generateVerifyEmailOtpTemplate(user.name, otp),
       }).catch(e => console.error("[login] Verification email send failed:", e.message));
-      const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
+      const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified, nickname: user.nickname };
       return res.status(200).json({ requiresEmailVerification: true, message: "Email not verified. Verification code sent.", user: safeUser });
     }
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-    const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
+    const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified, nickname: user.nickname };
     return res.status(200).json({ token, user: safeUser });
   } catch (error) {
     res.status(500).json({ error: error.message });

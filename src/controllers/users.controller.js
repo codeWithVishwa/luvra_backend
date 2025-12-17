@@ -8,6 +8,7 @@ import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { getIO } from "../socket.js";
+import { suggestUsernames } from "../utils/nameSuggestions.js";
 
 // Lazy Cloudinary configuration so it works even if dotenv loads later
 function ensureCloudinaryConfigured() {
@@ -218,13 +219,14 @@ export const getChateableUsers = async (req, res) => {
     // Fetch user details
     let users = await User.find({
       _id: { $in: chateableIds },
-    }).select('_id name avatarUrl isPrivate').lean();
+    }).select('_id name nickname avatarUrl isPrivate').lean();
     
     // Filter by search query if provided
     if (q) {
-      users = users.filter(u => 
-        (u.name || '').toLowerCase().includes(q)
-      );
+      users = users.filter(u => {
+        const display = (u.nickname || u.name || '').toLowerCase();
+        return display.includes(q);
+      });
     }
     
     // Add relationship info
@@ -240,7 +242,9 @@ export const getChateableUsers = async (req, res) => {
       const bMutual = b.isFollowing && b.isFollower;
       if (aMutual && !bMutual) return -1;
       if (!aMutual && bMutual) return 1;
-      return (a.name || '').localeCompare(b.name || '');
+      const aName = (a.nickname || a.name || '').toLowerCase();
+      const bName = (b.nickname || b.name || '').toLowerCase();
+      return aName.localeCompare(bName);
     });
     
     res.json({ users: usersWithRelation });
@@ -259,12 +263,13 @@ export const searchUsers = async (req, res) => {
       {
         $match: {
           _id: { $ne: viewerId },
-          name: regex,
+          $or: [{ name: regex }, { nickname: regex }],
         },
       },
       {
         $project: {
           name: 1,
+          nickname: 1,
           email: 1,
           verified: 1,
           avatarUrl: 1,
@@ -286,6 +291,7 @@ export const searchUsers = async (req, res) => {
       return {
         _id: doc._id,
         name: doc.name,
+        nickname: doc.nickname,
         email: doc.email,
         verified: doc.verified,
         avatarUrl: doc.avatarUrl,
@@ -400,7 +406,7 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name email avatarUrl interests bio verified honorScore profileLikes isPrivate followers following");
+    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified honorScore profileLikes isPrivate followers following");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
@@ -409,6 +415,7 @@ export const getProfile = async (req, res) => {
     res.json({ user: {
       _id: user._id,
       name: user.name,
+      nickname: user.nickname,
       email: user.email,
       avatarUrl: user.avatarUrl,
       interests: user.interests,
@@ -426,7 +433,7 @@ export const getProfile = async (req, res) => {
 
 export const updateProfile = async (req, res) => {
   try {
-    const { name, interests, bio } = req.body;
+    const { name, nickname, interests, bio } = req.body;
     const isPrivateProvided = Object.prototype.hasOwnProperty.call(req.body, 'isPrivate');
     let nextPrivate;
     if (isPrivateProvided) {
@@ -439,10 +446,18 @@ export const updateProfile = async (req, res) => {
     }
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "User not found" });
-    if (name) {
-      const existing = await User.findOne({ nameLower: name.toLowerCase(), _id: { $ne: user._id } }).select('_id');
-      if (existing) return res.status(409).json({ message: 'Username already taken' });
-      user.name = name;
+    const normalizedName = typeof name === 'string' ? name.trim() : '';
+    if (normalizedName) {
+      const existing = await User.findOne({ nameLower: normalizedName.toLowerCase(), _id: { $ne: user._id } }).select('_id');
+      if (existing) {
+        const suggestions = await suggestUsernames(normalizedName);
+        return res.status(409).json({ message: 'Username already taken', suggestions });
+      }
+      user.name = normalizedName;
+    }
+    if (nickname !== undefined) {
+      const nextNick = typeof nickname === 'string' ? nickname.trim() : '';
+      user.nickname = nextNick ? nextNick.slice(0, 40) : null;
     }
     if (Array.isArray(interests)) user.interests = interests.slice(0, 20);
     if (typeof bio === 'string') user.bio = bio.slice(0, 300);
@@ -460,6 +475,7 @@ export const updateProfile = async (req, res) => {
       user: {
         _id: user._id,
         name: user.name,
+        nickname: user.nickname,
         email: user.email,
         avatarUrl: user.avatarUrl,
         interests: user.interests,
@@ -516,7 +532,7 @@ import { getOnlineUsers } from "../socket.js";
 export const listOnlineUsers = async (req, res) => {
   try {
     const onlineIds = Array.from(getOnlineUsers());
-    const users = await User.find({ _id: { $in: onlineIds } }).select("_id name email avatarUrl lastActiveAt");
+    const users = await User.find({ _id: { $in: onlineIds } }).select("_id name nickname email avatarUrl lastActiveAt");
     res.json({ users });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
@@ -524,7 +540,7 @@ export const listOnlineUsers = async (req, res) => {
 export const getUserBasic = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name avatarUrl lastActiveAt');
+    const user = await User.findById(userId).select('_id name nickname avatarUrl lastActiveAt');
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json({ user });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -533,7 +549,7 @@ export const getUserBasic = async (req, res) => {
 export const getUserPublicProfile = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+    const user = await User.findById(userId).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
     if (!user) return res.status(404).json({ message: 'User not found' });
     const viewerId = req.user._id;
     const [viewerProfile, postCount] = await Promise.all([
@@ -567,6 +583,7 @@ export const getUserPublicProfile = async (req, res) => {
     res.json({ user: {
       _id: user._id,
       name: user.name,
+      nickname: user.nickname,
       avatarUrl: user.avatarUrl,
       interests: user.interests,
       bio: user.bio,

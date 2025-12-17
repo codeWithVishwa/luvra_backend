@@ -18,6 +18,7 @@ const userSchema = new mongoose.Schema(
     },
   ],
   encryptionPublicKey: { type: String, default: null },
+  nickname: { type: String, trim: true, maxlength: 40, default: null },
   bio: { type: String, trim: true, maxlength: 300 },
     interests: [String],
     honorScore: { type: Number, default: 50 },
