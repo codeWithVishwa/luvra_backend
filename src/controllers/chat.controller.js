@@ -242,12 +242,13 @@ export const listMessages = async (req, res) => {
     let msgs = await Message.find(q)
       .sort({ createdAt: -1 })
       .limit(Number(limit))
-      .select("text type mediaUrl mediaDuration post sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType")
+      .select("text type mediaUrl mediaDuration post sharedProfile sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType")
       .populate({
         path: "post",
         select: "caption media author visibility",
         populate: { path: "author", select: "name avatarUrl" }
       })
+      .populate({ path: "sharedProfile", select: "name nickname avatarUrl isPrivate" })
       .lean();
 
     msgs = msgs.reverse();
@@ -288,8 +289,8 @@ export const listMessages = async (req, res) => {
 export const sendMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { text, payloadType = "text", media, postId } = req.body;
-    if (!text && !media && !postId) return res.status(400).json({ message: "Text, media, or post required" });
+    const { text, payloadType = "text", media, postId, profileId } = req.body;
+    if (!text && !media && !postId && !profileId) return res.status(400).json({ message: "Text, media, post, or profile required" });
 
     // Validate post share
     let postDoc = null;
@@ -300,6 +301,18 @@ export const sendMessage = async (req, res) => {
       postDoc = await Post.findById(postId).populate("author", "name avatarUrl isPrivate followers");
       if (!postDoc) {
         return res.status(404).json({ message: "Post not found" });
+      }
+    }
+
+    // Validate profile share
+    let sharedProfileDoc = null;
+    if (payloadType === "profile") {
+      if (!profileId || !mongoose.Types.ObjectId.isValid(profileId)) {
+        return res.status(400).json({ message: "Invalid profileId" });
+      }
+      sharedProfileDoc = await User.findById(profileId).select("name nickname avatarUrl isPrivate");
+      if (!sharedProfileDoc) {
+        return res.status(404).json({ message: "Profile not found" });
       }
     }
 
@@ -315,13 +328,17 @@ export const sendMessage = async (req, res) => {
       conversation: conversationId,
       sender: req.user._id,
       receiver: receiverId,
-      text: text || "",
+      text: text || (payloadType === "profile" ? "Shared profile" : ""),
       type: payloadType,
       readBy: [req.user._id],
     };
 
     if (postDoc) {
       messageData.post = postDoc._id;
+    }
+
+    if (sharedProfileDoc) {
+      messageData.sharedProfile = sharedProfileDoc._id;
     }
 
     // Include media if provided
@@ -331,12 +348,19 @@ export const sendMessage = async (req, res) => {
     }
 
     const message = await Message.create(messageData);
-    if (postDoc) {
-      await message.populate({
-        path: "post",
-        select: "caption media author visibility",
-        populate: { path: "author", select: "name avatarUrl" }
-      });
+    if (postDoc || sharedProfileDoc) {
+      const populateOps = [];
+      if (postDoc) {
+        populateOps.push({
+          path: "post",
+          select: "caption media author visibility",
+          populate: { path: "author", select: "name avatarUrl" }
+        });
+      }
+      if (sharedProfileDoc) {
+        populateOps.push({ path: "sharedProfile", select: "name nickname avatarUrl isPrivate" });
+      }
+      await message.populate(populateOps);
     }
 
     convo.lastMessage = {
@@ -356,8 +380,8 @@ export const sendMessage = async (req, res) => {
       for (const rid of recipients) {
         const recipientId = String(rid);
         
-        // Check privacy for recipient if post is private
-        let messageToSend = message.toObject();
+          // Check privacy for recipient if post is private
+          let messageToSend = message.toObject();
         if (messageToSend.post && messageToSend.post.visibility === 'private' && String(messageToSend.post.author?._id) !== recipientId) {
            const isFollowing = await User.exists({ _id: messageToSend.post.author._id, followers: recipientId });
            if (!isFollowing) {
