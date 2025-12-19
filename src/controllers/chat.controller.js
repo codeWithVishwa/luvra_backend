@@ -3,8 +3,9 @@ import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import Post from "../models/post.model.js";
 import mongoose from "mongoose";
-import { getIO, getOnlineUsers } from "../socket.js";
+import { getIO, getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 import { sendPushNotification } from "../utils/expoPush.js";
+import { buildMessageNotifyPayload, enqueuePendingMessageNotification } from "../utils/messageNotifications.js";
 import cloudinary from "cloudinary";
 
 function ensureCloudinaryConfigured() {
@@ -396,56 +397,58 @@ export const sendMessage = async (req, res) => {
            }
         }
 
-        // 1. Emit socket event if online
+        // 1) Always emit message:new for chat UIs (rooms-based)
         io.to(`user:${recipientId}`).emit("message:new", { conversationId, message: messageToSend });
-        
-        // 2. Check if offline or background (simplified: if not in onlineUsers set)
-        // Note: Ideally we'd check if they are actually in the chat screen, but for now "online" means connected to socket.
-        // If they are online but in another screen, they get the socket event and show a toast (handled by frontend).
-        // If they are offline, we send a push.
-        const isOnline = onlineUsers.has(recipientId);
-        
-        if (!isOnline) {
-          const recipient = await User.findById(recipientId).select("pushToken offlineNotifications");
-          
-          if (recipient) {
-            // A. Send Push Notification
-            if (recipient.pushToken) {
-              const senderName = req.user.name || "Someone";
-              const preview = text ? (text.length > 35 ? text.slice(0, 35) + "..." : text) : `[${payloadType}]`;
-              
+
+        // 2) Instagram-like notification system
+        // - If user is ONLINE: emit message:notify immediately (required payload)
+        // - If user is OFFLINE: persist PendingNotification for delivery on reconnect
+        const socketIds = getSocketIdsForUser(recipientId);
+        const isOnline = socketIds.length > 0 || onlineUsers.has(recipientId);
+        const senderUsername = req.user.nickname || req.user.name || "";
+        const senderAvatarUrl = req.user.avatarUrl || null;
+        const notifyPayload = buildMessageNotifyPayload({
+          senderId: req.user._id,
+          senderUsername,
+          senderAvatarUrl,
+          conversationId,
+          lastMessage: text || `[${payloadType}]`,
+          createdAt: message.createdAt,
+        });
+
+        if (isOnline) {
+          // Requirement says userId -> socketId; we emit to all active sockets for robustness.
+          if (socketIds.length) {
+            socketIds.forEach((sid) => io.to(sid).emit("message:notify", notifyPayload));
+          } else {
+            // Fallback: room-based delivery (should be rare)
+            io.to(`user:${recipientId}`).emit("message:notify", notifyPayload);
+          }
+        } else {
+          await enqueuePendingMessageNotification({
+            userId: recipientId,
+            fromUserId: req.user._id,
+            conversationId,
+            previewText: notifyPayload.lastMessage,
+          });
+
+          // Optional: keep existing push notification behavior if token exists.
+          try {
+            const recipient = await User.findById(recipientId).select("pushToken");
+            if (recipient?.pushToken) {
               await sendPushNotification(
                 recipient.pushToken,
-                senderName,
-                preview,
+                senderUsername || "New message",
+                notifyPayload.lastMessage,
                 {
                   conversationId,
-                  senderId: req.user._id,
+                  senderId: String(req.user._id),
                   type: "chat_message",
-                  senderName
+                  senderUsername,
                 }
               );
             }
-            
-            // B. Update Offline Queue (for summary later)
-            const existingNotifIndex = recipient.offlineNotifications.findIndex(
-              n => String(n.senderId) === String(req.user._id)
-            );
-            
-            if (existingNotifIndex >= 0) {
-              recipient.offlineNotifications[existingNotifIndex].count += 1;
-              recipient.offlineNotifications[existingNotifIndex].lastMessage = text || `[${payloadType}]`;
-              recipient.offlineNotifications[existingNotifIndex].updatedAt = new Date();
-            } else {
-              recipient.offlineNotifications.push({
-                senderId: req.user._id,
-                count: 1,
-                lastMessage: text || `[${payloadType}]`,
-                updatedAt: new Date()
-              });
-            }
-            await recipient.save();
-          }
+          } catch {}
         }
       }
     }
@@ -616,19 +619,47 @@ export const replyFromNotification = async (req, res) => {
         messageToSend.senderName = messageToSend.sender.nickname || messageToSend.sender.name;
         messageToSend.senderAvatarUrl = messageToSend.sender.avatarUrl;
       }
+      // Always emit message:new for chat UIs
       io.to(`user:${rid}`).emit("message:new", { conversationId, message: messageToSend });
-      
-      if (!onlineUsers.has(rid)) {
-        const recipient = await User.findById(rid).select("pushToken offlineNotifications");
-        if (recipient && recipient.pushToken) {
-          const senderName = req.user.name || "Someone";
-          await sendPushNotification(
-            recipient.pushToken,
-            senderName,
-            text,
-            { conversationId, senderId: req.user._id, type: "chat_message", senderName }
-          );
+
+      // Instagram-like in-app notification banner
+      const socketIds = getSocketIdsForUser(rid);
+      const isOnline = socketIds.length > 0 || onlineUsers.has(rid);
+      const senderUsername = req.user.nickname || req.user.name || "";
+      const senderAvatarUrl = req.user.avatarUrl || null;
+      const notifyPayload = buildMessageNotifyPayload({
+        senderId: req.user._id,
+        senderUsername,
+        senderAvatarUrl,
+        conversationId,
+        lastMessage: text,
+        createdAt: message.createdAt,
+      });
+
+      if (isOnline) {
+        if (socketIds.length) {
+          socketIds.forEach((sid) => io.to(sid).emit("message:notify", notifyPayload));
+        } else {
+          io.to(`user:${rid}`).emit("message:notify", notifyPayload);
         }
+      } else {
+        await enqueuePendingMessageNotification({
+          userId: rid,
+          fromUserId: req.user._id,
+          conversationId,
+          previewText: notifyPayload.lastMessage,
+        });
+        try {
+          const recipient = await User.findById(rid).select("pushToken");
+          if (recipient?.pushToken) {
+            await sendPushNotification(
+              recipient.pushToken,
+              senderUsername || "New message",
+              notifyPayload.lastMessage,
+              { conversationId, senderId: String(req.user._id), type: "chat_message", senderUsername }
+            );
+          }
+        } catch {}
       }
     }
 
