@@ -348,6 +348,8 @@ export const sendMessage = async (req, res) => {
     }
 
     const message = await Message.create(messageData);
+    // Ensure sender identity is available for real-time UI (toast/avatar)
+    await message.populate({ path: "sender", select: "_id name nickname avatarUrl" });
     if (postDoc || sharedProfileDoc) {
       const populateOps = [];
       if (postDoc) {
@@ -380,8 +382,13 @@ export const sendMessage = async (req, res) => {
       for (const rid of recipients) {
         const recipientId = String(rid);
         
-          // Check privacy for recipient if post is private
-          let messageToSend = message.toObject();
+           // Check privacy for recipient if post is private
+           let messageToSend = message.toObject();
+           // Provide explicit fallbacks for frontend toast rendering
+           if (messageToSend?.sender && typeof messageToSend.sender === 'object') {
+            messageToSend.senderName = messageToSend.sender.nickname || messageToSend.sender.name;
+            messageToSend.senderAvatarUrl = messageToSend.sender.avatarUrl;
+           }
         if (messageToSend.post && messageToSend.post.visibility === 'private' && String(messageToSend.post.author?._id) !== recipientId) {
            const isFollowing = await User.exists({ _id: messageToSend.post.author._id, followers: recipientId });
            if (!isFollowing) {
@@ -589,6 +596,8 @@ export const replyFromNotification = async (req, res) => {
     };
 
     const message = await Message.create(messageData);
+    // Ensure sender identity is available for real-time UI (toast/avatar)
+    await message.populate({ path: "sender", select: "_id name nickname avatarUrl" });
 
     convo.lastMessage = {
       text: text.length > 50 ? text.slice(0, 50) + "…" : text,
@@ -602,7 +611,12 @@ export const replyFromNotification = async (req, res) => {
     
     if (io) {
       const rid = String(receiverId);
-      io.to(`user:${rid}`).emit("message:new", { conversationId, message });
+      const messageToSend = message.toObject();
+      if (messageToSend?.sender && typeof messageToSend.sender === 'object') {
+        messageToSend.senderName = messageToSend.sender.nickname || messageToSend.sender.name;
+        messageToSend.senderAvatarUrl = messageToSend.sender.avatarUrl;
+      }
+      io.to(`user:${rid}`).emit("message:new", { conversationId, message: messageToSend });
       
       if (!onlineUsers.has(rid)) {
         const recipient = await User.findById(rid).select("pushToken offlineNotifications");
