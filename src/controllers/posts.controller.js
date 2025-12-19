@@ -37,6 +37,8 @@ function serializePost(post, viewerId) {
     visibility: post.visibility,
     createdAt: post.createdAt,
     commentCount: typeof post.commentCount === "number" ? post.commentCount : 0,
+    hideLikeCount: !!post.hideLikeCount,
+    commentsDisabled: !!post.commentsDisabled,
     author: post.author
       ? {
           _id: post.author._id,
@@ -277,7 +279,7 @@ export const listPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
     const post = await Post.findById(postId)
-      .select("author visibility media caption createdAt")
+      .select("author visibility media caption createdAt hideLikeCount commentsDisabled")
       .populate("author", "_id name avatarUrl");
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
@@ -305,6 +307,8 @@ export const listPostComments = async (req, res) => {
       caption: post.caption,
       media: previewMedia,
       createdAt: post.createdAt,
+      hideLikeCount: !!post.hideLikeCount,
+      commentsDisabled: !!post.commentsDisabled,
     };
     res.json({ comments: serialized, nextCursor, post: postPreview });
   } catch (e) {
@@ -320,10 +324,15 @@ export const addComment = async (req, res) => {
     const rawParentId = typeof req.body.parentId === "string" ? req.body.parentId.trim() : "";
 
     const post = await Post.findById(postId)
-      .select("author visibility caption media createdAt")
+      .select("author visibility caption media createdAt commentsDisabled")
       .populate("author", "_id name avatarUrl");
     if (!post) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+
+    const postAuthorId = post.author?._id || post.author;
+    if (post.commentsDisabled && String(postAuthorId) !== String(req.user._id)) {
+      return res.status(403).json({ message: "Comments are disabled for this post" });
+    }
 
     let parentId = null;
     if (rawParentId) {
@@ -392,6 +401,28 @@ export const addComment = async (req, res) => {
     res.status(201).json({ comment: serializeComment(populated) });
   } catch (e) {
     res.status(500).json({ message: e.message });
+  }
+};
+
+export const updatePostSettings = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findById(postId).select("_id author hideLikeCount commentsDisabled");
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    const authorId = post.author && post.author._id ? post.author._id : post.author;
+    if (String(authorId) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
+
+    if (typeof req.body.hideLikeCount === "boolean") post.hideLikeCount = req.body.hideLikeCount;
+    if (typeof req.body.commentsDisabled === "boolean") post.commentsDisabled = req.body.commentsDisabled;
+    await post.save();
+
+    return res.json({
+      ok: true,
+      hideLikeCount: !!post.hideLikeCount,
+      commentsDisabled: !!post.commentsDisabled,
+    });
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
   }
 };
 

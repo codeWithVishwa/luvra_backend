@@ -21,6 +21,8 @@ const postSchema = new mongoose.Schema(
     visibility: { type: String, enum: ["public", "private"], default: "public" },
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     commentCount: { type: Number, default: 0 },
+    hideLikeCount: { type: Boolean, default: false },
+    commentsDisabled: { type: Boolean, default: false },
     isDelete:{type:Boolean,default:false}
   },
   { timestamps: true }

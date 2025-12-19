@@ -12,6 +12,7 @@ import {
   listUserPosts,
   unlikePost,
   uploadPostMedia,
+  updatePostSettings,
 } from "../controllers/posts.controller.js";
 
 const router = express.Router();
@@ -25,6 +26,7 @@ router.delete("/:postId/like", auth, unlikePost);
 router.get("/:postId/comments", auth, listPostComments);
 router.post("/:postId/comments", auth, addComment);
 router.delete("/:postId/comments/:commentId", auth, deleteComment);
+router.patch(":postId/settings", auth, updatePostSettings);
 router.delete("/:postId", auth, deletePost);
 
 export default router;
