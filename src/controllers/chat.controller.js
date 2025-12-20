@@ -246,13 +246,23 @@ export const listMessages = async (req, res) => {
       .select("text type mediaUrl mediaDuration post sharedProfile sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType")
       .populate({
         path: "post",
-        select: "caption media author visibility",
+        select: "caption media author visibility isDelete createdAt",
         populate: { path: "author", select: "name avatarUrl" }
       })
       .populate({ path: "sharedProfile", select: "name nickname avatarUrl isPrivate" })
       .lean();
 
     msgs = msgs.reverse();
+
+    // If a shared post was deleted/removed, represent it as unavailable.
+    // This mirrors Instagram-style behavior: keep the message bubble, but show an unavailable card.
+    for (const msg of msgs) {
+      if (msg.type === 'post') {
+        if (!msg.post || msg.post?.isDelete) {
+          msg.post = { unavailable: true, unavailableReason: 'deleted' };
+        }
+      }
+    }
 
     // Privacy Check: Hide private posts if viewer doesn't follow author
     const viewerId = String(req.user._id);
@@ -275,7 +285,7 @@ export const listMessages = async (req, res) => {
       for (const msg of msgs) {
         if (msg.post && msg.post.visibility === 'private' && msg.post.author && String(msg.post.author._id) !== viewerId) {
           if (!followingSet.has(String(msg.post.author._id))) {
-             msg.post = { unavailable: true };
+             msg.post = { unavailable: true, unavailableReason: 'private' };
           }
         }
       }
@@ -390,10 +400,14 @@ export const sendMessage = async (req, res) => {
             messageToSend.senderName = messageToSend.sender.nickname || messageToSend.sender.name;
             messageToSend.senderAvatarUrl = messageToSend.sender.avatarUrl;
            }
-        if (messageToSend.post && messageToSend.post.visibility === 'private' && String(messageToSend.post.author?._id) !== recipientId) {
+          if (messageToSend.type === 'post' && (!messageToSend.post || messageToSend.post?.isDelete)) {
+           messageToSend.post = { unavailable: true, unavailableReason: 'deleted' };
+          }
+
+          if (messageToSend.post && messageToSend.post.visibility === 'private' && String(messageToSend.post.author?._id) !== recipientId) {
            const isFollowing = await User.exists({ _id: messageToSend.post.author._id, followers: recipientId });
            if (!isFollowing) {
-              messageToSend.post = { unavailable: true };
+              messageToSend.post = { unavailable: true, unavailableReason: 'private' };
            }
         }
 
