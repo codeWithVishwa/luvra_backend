@@ -764,9 +764,35 @@ export const updatePushToken = async (req, res) => {
   try {
     const { token } = req.body;
     if (!token) return res.status(400).json({ message: "Token required" });
-    
-    await User.findByIdAndUpdate(req.user._id, { pushToken: token });
-    res.json({ ok: true });
+
+    const now = new Date();
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { pushToken: token, pushTokenUpdatedAt: now },
+      { new: true }
+    ).select("_id pushToken pushTokenUpdatedAt");
+
+    // Helpful server log for debugging token freshness (don’t print full token)
+    const tokenSuffix = typeof token === 'string' ? token.slice(-12) : '';
+    console.log(`[push] token updated user=${String(req.user._id)} suffix=${tokenSuffix} at=${now.toISOString()}`);
+
+    res.json({ ok: true, pushTokenUpdatedAt: updated?.pushTokenUpdatedAt || now });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const getMyPushTokenStatus = async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id).select("_id pushToken pushTokenUpdatedAt").lean();
+    if (!me) return res.status(404).json({ message: "User not found" });
+
+    const token = me.pushToken || null;
+    res.json({
+      hasToken: Boolean(token),
+      tokenSuffix: token ? String(token).slice(-12) : null,
+      pushTokenUpdatedAt: me.pushTokenUpdatedAt || null,
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

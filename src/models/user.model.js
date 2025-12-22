@@ -41,6 +41,7 @@ const userSchema = new mongoose.Schema(
     lastActiveAt: { type: Date, default: Date.now, index: true },
     // Push Notifications
     pushToken: { type: String, default: null },
+    pushTokenUpdatedAt: { type: Date, default: null },
     offlineNotifications: [{
       senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       count: { type: Number, default: 1 },

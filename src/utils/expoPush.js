@@ -8,6 +8,11 @@ export const sendPushNotification = async (pushToken, title, body, data = {}) =>
     return;
   }
 
+  // If the device is offline, FCM/APNs may store the notification and deliver it
+  // when the device comes back online, as long as it's within the TTL.
+  // (Tune this to your product needs.)
+  const ttlSeconds = 60 * 60 * 24; // 24 hours
+
   const messages = [{
     to: pushToken,
     sound: 'default',
@@ -16,6 +21,8 @@ export const sendPushNotification = async (pushToken, title, body, data = {}) =>
     data: data,
     priority: 'high',
     channelId: 'chat-messages', // For Android 8.0+
+    ttl: ttlSeconds,
+    expiration: Math.floor(Date.now() / 1000) + ttlSeconds,
   }];
 
   try {
@@ -23,8 +30,14 @@ export const sendPushNotification = async (pushToken, title, body, data = {}) =>
     for (let chunk of chunks) {
       try {
         const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-        // console.log('Push ticket', ticketChunk);
-        // In a real app, you'd handle errors here (e.g., invalid token)
+        for (const ticket of ticketChunk) {
+          if (ticket.status === 'error') {
+            console.error('[push] Expo ticket error', {
+              message: ticket.message,
+              details: ticket.details,
+            });
+          }
+        }
       } catch (error) {
         console.error('Error sending push chunk', error);
       }
