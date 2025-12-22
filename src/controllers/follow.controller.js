@@ -1,4 +1,15 @@
 import User from "../models/user.model.js";
+import Notification from "../models/notification.model.js";
+import { sendPushNotification } from "../utils/expoPush.js";
+import { getOnlineUsers, getSocketIdsForUser } from "../socket.js";
+
+function toAbsoluteUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base = process.env.APP_BASE_URL || process.env.BASE_URL;
+  if (!base) return url;
+  return `${String(base).replace(/\/$/, "")}/${url.replace(/^\//, "")}`;
+}
 
 function idsEqual(a, b) {
   return String(a) === String(b);
@@ -61,6 +72,52 @@ export const followUser = async (req, res) => {
         target.followRequests.push(req.user._id);
         await target.save();
       }
+
+      // Persist + push: follow request
+      Notification.findOneAndUpdate(
+        { user: targetUserId, type: "follow_request", actor: req.user._id },
+        {
+          user: targetUserId,
+          actor: req.user._id,
+          type: "follow_request",
+          metadata: {
+            message: `${req.user.name || "Someone"} requested to follow you`,
+          },
+          readAt: null,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).catch(() => {});
+
+      try {
+        const recipientId = String(targetUserId);
+        const onlineUsers = getOnlineUsers();
+        const socketIds = getSocketIdsForUser(recipientId);
+        const isOnline = socketIds.length > 0 || onlineUsers.has(recipientId);
+
+        if (!isOnline) {
+          const recipient = await User.findById(recipientId).select("pushToken");
+          if (recipient?.pushToken) {
+            const senderAvatarUrl = toAbsoluteUrl(req.user.avatarUrl) || null;
+            await sendPushNotification(
+              recipient.pushToken,
+              "Follow request",
+              `${req.user.name || "Someone"} requested to follow you`,
+              {
+                type: "follow_request",
+                senderId: String(req.user._id),
+                senderUsername: req.user.nickname || req.user.name || "",
+                senderAvatarUrl,
+              },
+              {
+                collapseId: `followreq:${recipientId}:${String(req.user._id)}`,
+                threadId: `followreq:${recipientId}`,
+                image: senderAvatarUrl,
+              }
+            );
+          }
+        }
+      } catch {}
+
       return res.json({ status: "requested" });
     }
 
@@ -71,6 +128,52 @@ export const followUser = async (req, res) => {
         $pull: { followRequests: req.user._id },
       }),
     ]);
+
+    // Persist + push: follow
+    Notification.findOneAndUpdate(
+      { user: targetUserId, type: "follow", actor: req.user._id },
+      {
+        user: targetUserId,
+        actor: req.user._id,
+        type: "follow",
+        metadata: {
+          message: `${req.user.name || "Someone"} started following you`,
+        },
+        readAt: null,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).catch(() => {});
+
+    try {
+      const recipientId = String(targetUserId);
+      const onlineUsers = getOnlineUsers();
+      const socketIds = getSocketIdsForUser(recipientId);
+      const isOnline = socketIds.length > 0 || onlineUsers.has(recipientId);
+
+      if (!isOnline) {
+        const recipient = await User.findById(recipientId).select("pushToken");
+        if (recipient?.pushToken) {
+          const senderAvatarUrl = toAbsoluteUrl(req.user.avatarUrl) || null;
+          await sendPushNotification(
+            recipient.pushToken,
+            "New follower",
+            `${req.user.name || "Someone"} started following you`,
+            {
+              type: "follow",
+              senderId: String(req.user._id),
+              senderUsername: req.user.nickname || req.user.name || "",
+              senderAvatarUrl,
+            },
+            {
+              collapseId: `follow:${recipientId}:${String(req.user._id)}`,
+              threadId: `follow:${recipientId}`,
+              image: senderAvatarUrl,
+            }
+          );
+        }
+      }
+    } catch {}
+
     return res.json({ status: "following" });
   } catch (e) {
     res.status(e.statusCode || 500).json({ message: e.message });

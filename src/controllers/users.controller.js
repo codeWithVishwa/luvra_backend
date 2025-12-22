@@ -9,6 +9,8 @@ import path from "path";
 import crypto from "crypto";
 import { getIO } from "../socket.js";
 import { suggestUsernames } from "../utils/nameSuggestions.js";
+import { sendPushNotification } from "../utils/expoPush.js";
+import { getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 
 // Lazy Cloudinary configuration so it works even if dotenv loads later
 function ensureCloudinaryConfigured() {
@@ -150,6 +152,14 @@ function serializeNotification(notification) {
         }
       : null,
   };
+}
+
+function toAbsoluteUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base = process.env.APP_BASE_URL || process.env.BASE_URL;
+  if (!base) return url;
+  return `${String(base).replace(/\/$/, "")}/${url.replace(/^\//, "")}`;
 }
 
 async function viewerCanSeePost(userId, postId) {
@@ -333,6 +343,37 @@ export const sendFriendRequest = async (req, res) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).catch(() => {});
+
+    // Push (only if recipient is offline)
+    try {
+      const recipientId = String(to);
+      const onlineUsers = getOnlineUsers();
+      const socketIds = getSocketIdsForUser(recipientId);
+      const isOnline = socketIds.length > 0 || onlineUsers.has(recipientId);
+      if (!isOnline) {
+        const recipient = await User.findById(recipientId).select("pushToken");
+        if (recipient?.pushToken) {
+          const senderAvatarUrl = toAbsoluteUrl(req.user.avatarUrl) || null;
+          await sendPushNotification(
+            recipient.pushToken,
+            "Friend request",
+            `${req.user.name || "Someone"} sent you a friend request`,
+            {
+              type: "friend_request",
+              senderId: String(req.user._id),
+              senderUsername: req.user.nickname || req.user.name || "",
+              senderAvatarUrl,
+            },
+            {
+              collapseId: `friendreq:${recipientId}:${String(req.user._id)}`,
+              threadId: `friendreq:${recipientId}`,
+              image: senderAvatarUrl,
+            }
+          );
+        }
+      }
+    } catch {}
+
     res.status(201).json({ request: fr });
   } catch (e) {
     res.status(500).json({ message: e.message });

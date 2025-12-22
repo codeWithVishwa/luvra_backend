@@ -55,6 +55,14 @@ function ciphertextPreview(ciphertext) {
   return `${ciphertext.slice(0, 48)}${ciphertext.length > 48 ? "…" : ""}`;
 }
 
+function toAbsoluteUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base = process.env.APP_BASE_URL || process.env.BASE_URL;
+  if (!base) return url;
+  return `${String(base).replace(/\/$/, "")}/${url.replace(/^\//, "")}`;
+}
+
 async function upsertDirectConversation(userId, otherId) {
   const [lower, higher] = ensureParticipants(userId, otherId);
   const pairKey = `${lower}:${higher}`;
@@ -420,7 +428,7 @@ export const sendMessage = async (req, res) => {
         const socketIds = getSocketIdsForUser(recipientId);
         const isOnline = socketIds.length > 0 || onlineUsers.has(recipientId);
         const senderUsername = req.user.nickname || req.user.name || "";
-        const senderAvatarUrl = req.user.avatarUrl || null;
+        const senderAvatarUrl = toAbsoluteUrl(req.user.avatarUrl) || null;
         const notifyPayload = buildMessageNotifyPayload({
           senderId: req.user._id,
           senderUsername,
@@ -466,6 +474,13 @@ export const sendMessage = async (req, res) => {
                   senderId: String(req.user._id),
                   type: "chat_message",
                   senderUsername,
+                  senderAvatarUrl,
+                }
+                ,
+                {
+                  collapseId: `chat:${conversationId}`,
+                  threadId: `chat:${conversationId}`,
+                  image: senderAvatarUrl,
                 }
               );
               console.log(`[push] sent attempt recipient=${recipientId}`);
@@ -650,7 +665,7 @@ export const replyFromNotification = async (req, res) => {
       const socketIds = getSocketIdsForUser(rid);
       const isOnline = socketIds.length > 0 || onlineUsers.has(rid);
       const senderUsername = req.user.nickname || req.user.name || "";
-      const senderAvatarUrl = req.user.avatarUrl || null;
+      const senderAvatarUrl = toAbsoluteUrl(req.user.avatarUrl) || null;
       const notifyPayload = buildMessageNotifyPayload({
         senderId: req.user._id,
         senderUsername,
@@ -680,7 +695,18 @@ export const replyFromNotification = async (req, res) => {
               recipient.pushToken,
               senderUsername || "New message",
               notifyPayload.lastMessage,
-              { conversationId, senderId: String(req.user._id), type: "chat_message", senderUsername }
+              {
+                conversationId,
+                senderId: String(req.user._id),
+                type: "chat_message",
+                senderUsername,
+                senderAvatarUrl,
+              },
+              {
+                collapseId: `chat:${conversationId}`,
+                threadId: `chat:${conversationId}`,
+                image: senderAvatarUrl,
+              }
             );
           }
         } catch {}

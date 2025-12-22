@@ -3,6 +3,8 @@ import Post from "../models/post.model.js";
 import User from "../models/user.model.js";
 import Comment from "../models/comment.model.js";
 import Notification from "../models/notification.model.js";
+import { sendPushNotification } from "../utils/expoPush.js";
+import { getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 
 function ensureCloudinaryConfigured() {
   const cfg = cloudinary.v2.config();
@@ -394,6 +396,41 @@ export const addComment = async (req, res) => {
             ).catch(() => {})
           )
         );
+
+        // Push mentions (only when recipient is offline)
+        try {
+          const onlineUsers = getOnlineUsers();
+          const senderAvatarUrl = (req.user?.avatarUrl && (String(req.user.avatarUrl).startsWith('http') ? req.user.avatarUrl : null)) || null;
+
+          await Promise.all(
+            eligibleMentionedIds.map(async (mentionedId) => {
+              const recipientId = String(mentionedId);
+              const socketIds = getSocketIdsForUser(recipientId);
+              const isOnline = socketIds.length > 0 || onlineUsers.has(recipientId);
+              if (isOnline) return;
+              const recipient = await User.findById(recipientId).select('pushToken');
+              if (!recipient?.pushToken) return;
+              await sendPushNotification(
+                recipient.pushToken,
+                'Mention',
+                `${req.user.name || 'Someone'} mentioned you`,
+                {
+                  type: 'comment_mention',
+                  postId: String(post._id),
+                  commentId: String(comment._id),
+                  senderId: String(req.user._id),
+                  senderUsername: req.user.nickname || req.user.name || '',
+                  senderAvatarUrl,
+                },
+                {
+                  collapseId: `mention:${String(post._id)}:${recipientId}`,
+                  threadId: `mention:${recipientId}`,
+                  image: senderAvatarUrl,
+                }
+              );
+            })
+          );
+        } catch {}
       }
     }
 
