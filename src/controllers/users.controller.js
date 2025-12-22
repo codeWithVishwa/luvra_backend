@@ -569,7 +569,6 @@ export const uploadAvatar = async (req, res) => {
 };
 
 // Online users will be tracked in socket.js; we expose an endpoint to query
-import { getOnlineUsers } from "../socket.js";
 export const listOnlineUsers = async (req, res) => {
   try {
     const onlineIds = Array.from(getOnlineUsers());
