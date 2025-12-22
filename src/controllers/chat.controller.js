@@ -431,6 +431,10 @@ export const sendMessage = async (req, res) => {
         });
 
         if (isOnline) {
+          // Debug: push notifications are only sent when recipient is offline.
+          // If you expect a push while the app is "closed" but backend thinks user is online,
+          // this log will confirm the decision path.
+          console.log(`[chat] notify recipient=${recipientId} online=true sockets=${socketIds.length}`);
           // Requirement says userId -> socketId; we emit to all active sockets for robustness.
           if (socketIds.length) {
             socketIds.forEach((sid) => io.to(sid).emit("message:notify", notifyPayload));
@@ -439,6 +443,7 @@ export const sendMessage = async (req, res) => {
             io.to(`user:${recipientId}`).emit("message:notify", notifyPayload);
           }
         } else {
+          console.log(`[chat] notify recipient=${recipientId} online=false sockets=${socketIds.length} -> will enqueue + maybe push`);
           await enqueuePendingMessageNotification({
             userId: recipientId,
             fromUserId: req.user._id,
@@ -450,6 +455,8 @@ export const sendMessage = async (req, res) => {
           try {
             const recipient = await User.findById(recipientId).select("pushToken");
             if (recipient?.pushToken) {
+              const suffix = String(recipient.pushToken).slice(-12);
+              console.log(`[push] attempting recipient=${recipientId} tokenSuffix=${suffix}`);
               await sendPushNotification(
                 recipient.pushToken,
                 senderUsername || "New message",
@@ -461,6 +468,9 @@ export const sendMessage = async (req, res) => {
                   senderUsername,
                 }
               );
+              console.log(`[push] sent attempt recipient=${recipientId}`);
+            } else {
+              console.log(`[push] skipped (no token) recipient=${recipientId}`);
             }
           } catch {}
         }
