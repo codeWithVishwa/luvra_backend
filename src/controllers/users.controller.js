@@ -803,9 +803,18 @@ export const recommendFriends = async (req, res) => {
 export const updatePushToken = async (req, res) => {
   try {
     const { token } = req.body;
-    if (!token) return res.status(400).json({ message: "Token required" });
+    if (!token || typeof token !== 'string') return res.status(400).json({ message: "Token required" });
 
     const now = new Date();
+
+    // IMPORTANT: tokens are device-scoped, not account-scoped.
+    // If the same device logs into a different account, we must move the token.
+    // Otherwise pushes can go to the wrong user (exact issue reported).
+    const dedupeRes = await User.updateMany(
+      { pushToken: token, _id: { $ne: req.user._id } },
+      { $unset: { pushToken: 1, pushTokenUpdatedAt: 1 } }
+    ).catch(() => null);
+
     const updated = await User.findByIdAndUpdate(
       req.user._id,
       { pushToken: token, pushTokenUpdatedAt: now },
@@ -814,7 +823,8 @@ export const updatePushToken = async (req, res) => {
 
     // Helpful server log for debugging token freshness (don’t print full token)
     const tokenSuffix = typeof token === 'string' ? token.slice(-12) : '';
-    console.log(`[push] token updated user=${String(req.user._id)} suffix=${tokenSuffix} at=${now.toISOString()}`);
+    const moved = dedupeRes && typeof dedupeRes.modifiedCount === 'number' ? dedupeRes.modifiedCount : null;
+    console.log(`[push] token updated user=${String(req.user._id)} suffix=${tokenSuffix} movedFromOthers=${moved} at=${now.toISOString()}`);
 
     res.json({ ok: true, pushTokenUpdatedAt: updated?.pushTokenUpdatedAt || now });
   } catch (e) {
