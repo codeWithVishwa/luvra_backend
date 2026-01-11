@@ -1,6 +1,6 @@
 import express from "express";
 import auth from "../middleware/auth.js";
-import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications, getChateableUsers, getFollowersList, getFollowingList, updatePushToken, getMyPushTokenStatus } from "../controllers/users.controller.js";
+import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications, markAllNotificationsRead, getChateableUsers, getFollowersList, getFollowingList, updatePushToken, clearPushToken, getMyPushTokenStatus } from "../controllers/users.controller.js";
 import { followUser, unfollowUser, getFollowRequests, acceptFollowRequest, rejectFollowRequest } from "../controllers/follow.controller.js";
 import { uploadEncryptionPublicKey, getEncryptionPublicKey } from "../controllers/encryption.controller.js";
 import { upload } from "../middleware/upload.js";
@@ -8,12 +8,14 @@ import { upload } from "../middleware/upload.js";
 const router = express.Router();
 
 router.post("/push-token", auth, updatePushToken);
+router.post("/push-token/clear", auth, clearPushToken);
 router.get("/push-token/status", auth, getMyPushTokenStatus);
 router.get("/search", auth, searchUsers);
 router.get("/chateable", auth, getChateableUsers);
 router.post("/request/:userId", auth, sendFriendRequest);
 router.get("/requests", auth, listFriendRequests);
 router.get("/notifications", auth, listNotifications);
+router.post("/notifications/read-all", auth, markAllNotificationsRead);
 router.post("/requests/:requestId/respond", auth, respondFriendRequest);
 router.get("/contacts", auth, listContacts);
 router.delete("/contacts/:userId", auth, removeFriend);

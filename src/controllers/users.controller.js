@@ -392,9 +392,16 @@ export const listFriendRequests = async (req, res) => {
 export const listNotifications = async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 40, 100);
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const cutoff = new Date(Date.now() - sevenDaysMs);
+
+    // Weekly cleanup (Instagram-style): remove notifications older than 7 days.
+    // This keeps the feed lightweight and prevents very old items from reappearing.
+    await Notification.deleteMany({ user: req.user._id, createdAt: { $lt: cutoff } }).catch(() => {});
+
     const [requests, notifications, recommendations] = await Promise.all([
       fetchFriendRequestLists(req.user._id),
-      Notification.find({ user: req.user._id })
+      Notification.find({ user: req.user._id, createdAt: { $gte: cutoff } })
         .sort({ createdAt: -1 })
         .limit(limit)
         .populate('actor', '_id name avatarUrl'),
@@ -407,6 +414,19 @@ export const listNotifications = async (req, res) => {
       notifications: safeNotifications.map(serializeNotification),
       recommendations,
     });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const markAllNotificationsRead = async (req, res) => {
+  try {
+    const now = new Date();
+    const result = await Notification.updateMany(
+      { user: req.user._id, readAt: null },
+      { $set: { readAt: now } }
+    );
+    res.json({ ok: true, modified: result?.modifiedCount ?? 0, readAt: now });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -827,6 +847,22 @@ export const updatePushToken = async (req, res) => {
     console.log(`[push] token updated user=${String(req.user._id)} suffix=${tokenSuffix} movedFromOthers=${moved} at=${now.toISOString()}`);
 
     res.json({ ok: true, pushTokenUpdatedAt: updated?.pushTokenUpdatedAt || now });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const clearPushToken = async (req, res) => {
+  try {
+    const now = new Date();
+    await User.findByIdAndUpdate(
+      req.user._id,
+      { $unset: { pushToken: 1, pushTokenUpdatedAt: 1 } },
+      { new: false }
+    );
+
+    console.log(`[push] token cleared user=${String(req.user._id)} at=${now.toISOString()}`);
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

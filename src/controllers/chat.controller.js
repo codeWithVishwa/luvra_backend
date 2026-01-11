@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import { getIO, getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 import { sendPushNotification } from "../utils/expoPush.js";
 import { buildMessageNotifyPayload, enqueuePendingMessageNotification } from "../utils/messageNotifications.js";
+import { decideChatPush } from "../utils/chatPushThrottle.js";
 import cloudinary from "cloudinary";
 
 function ensureCloudinaryConfigured() {
@@ -463,12 +464,27 @@ export const sendMessage = async (req, res) => {
           try {
             const recipient = await User.findById(recipientId).select("pushToken");
             if (recipient?.pushToken) {
+              const pushDecision = await decideChatPush({
+                userId: recipientId,
+                fromUserId: req.user._id,
+                conversationId,
+                previewText: notifyPayload.lastMessage,
+              });
+              if (!pushDecision.send) {
+                console.log(`[push] throttled recipient=${recipientId} convo=${conversationId} suppressed=${pushDecision.suppressedSinceLastSend}`);
+                continue;
+              }
+
+              const pushBody = pushDecision.suppressedSinceLastSend > 0
+                ? `${pushDecision.suppressedSinceLastSend + 1} new messages: ${notifyPayload.lastMessage}`
+                : notifyPayload.lastMessage;
+
               const suffix = String(recipient.pushToken).slice(-12);
               console.log(`[push] attempting recipient=${recipientId} tokenSuffix=${suffix}`);
               await sendPushNotification(
                 recipient.pushToken,
                 senderUsername || "New message",
-                notifyPayload.lastMessage,
+                pushBody,
                 {
                   conversationId,
                   senderId: String(req.user._id),
@@ -480,6 +496,7 @@ export const sendMessage = async (req, res) => {
                 {
                   collapseId: `chat:${conversationId}`,
                   threadId: `chat:${conversationId}`,
+                  categoryId: 'chat_message',
                   image: senderAvatarUrl,
                 }
               );
@@ -691,10 +708,24 @@ export const replyFromNotification = async (req, res) => {
         try {
           const recipient = await User.findById(rid).select("pushToken");
           if (recipient?.pushToken) {
+            const pushDecision = await decideChatPush({
+              userId: rid,
+              fromUserId: req.user._id,
+              conversationId,
+              previewText: notifyPayload.lastMessage,
+            });
+            if (!pushDecision.send) {
+              return;
+            }
+
+            const pushBody = pushDecision.suppressedSinceLastSend > 0
+              ? `${pushDecision.suppressedSinceLastSend + 1} new messages: ${notifyPayload.lastMessage}`
+              : notifyPayload.lastMessage;
+
             await sendPushNotification(
               recipient.pushToken,
               senderUsername || "New message",
-              notifyPayload.lastMessage,
+              pushBody,
               {
                 conversationId,
                 senderId: String(req.user._id),
@@ -705,6 +736,7 @@ export const replyFromNotification = async (req, res) => {
               {
                 collapseId: `chat:${conversationId}`,
                 threadId: `chat:${conversationId}`,
+                categoryId: 'chat_message',
                 image: senderAvatarUrl,
               }
             );
