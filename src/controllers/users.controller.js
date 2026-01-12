@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import User from "../models/user.model.js";
 import FriendRequest from "../models/friendRequest.model.js";
 import Post from "../models/post.model.js";
@@ -268,8 +269,53 @@ export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
     if (!q) return res.json({ users: [] });
+    const isObjectId = /^[0-9a-fA-F]{24}$/.test(q);
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const viewerId = req.user._id;
+
+    // Search by id if query looks like an ObjectId
+    if (isObjectId) {
+      const oid = new mongoose.Types.ObjectId(q);
+      const docs = await User.aggregate([
+        { $match: { _id: oid, _id: { $ne: viewerId } } },
+        {
+          $project: {
+            name: 1,
+            nickname: 1,
+            email: 1,
+            verified: 1,
+            avatarUrl: 1,
+            isPrivate: 1,
+            followerCount: { $size: { $ifNull: ["$followers", []] } },
+            followingCount: { $size: { $ifNull: ["$following", []] } },
+            viewerIsFollower: { $in: [viewerId, { $ifNull: ["$followers", []] }] },
+            viewerRequested: { $in: [viewerId, { $ifNull: ["$followRequests", []] }] },
+            targetFollowsViewer: { $in: [viewerId, { $ifNull: ["$following", []] }] },
+          },
+        },
+        { $limit: 1 },
+      ]);
+      const users = docs.map((doc) => {
+        let followStatus = "not_following";
+        if (doc.viewerIsFollower) followStatus = "following";
+        else if (doc.viewerRequested) followStatus = "requested";
+        else if (doc.targetFollowsViewer) followStatus = "follow_back";
+        return {
+          _id: doc._id,
+          name: doc.name,
+          nickname: doc.nickname,
+          email: doc.email,
+          verified: doc.verified,
+          avatarUrl: doc.avatarUrl,
+          isPrivate: !!doc.isPrivate,
+          followerCount: doc.followerCount || 0,
+          followingCount: doc.followingCount || 0,
+          followStatus,
+        };
+      });
+      return res.json({ users });
+    }
+
     const docs = await User.aggregate([
       {
         $match: {

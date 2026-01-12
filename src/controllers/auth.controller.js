@@ -120,8 +120,13 @@ export const login = async (req, res) => {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: "User not found" });
-    if(!user.status=="suspended") return res.status(400).json({message:"Your account has been suspended due to a violation of our policies."});
-    if(!user.status=="banned") return res.status(400).json({message:"Your account has been permanently banned for violating our policies."})
+
+    if (user.status === "suspended") {
+      return res.status(403).json({ message: "Your account has been suspended due to a violation of our policies." });
+    }
+    if (user.status === "banned") {
+      return res.status(403).json({ message: "Your account has been permanently banned for violating our policies." });
+    }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(400).json({ message: "Invalid credentials" });
