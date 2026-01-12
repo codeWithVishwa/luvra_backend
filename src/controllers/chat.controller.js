@@ -319,7 +319,7 @@ export const sendMessage = async (req, res) => {
         return res.status(400).json({ message: "Invalid postId" });
       }
       postDoc = await Post.findById(postId).populate("author", "name avatarUrl isPrivate followers");
-      if (!postDoc) {
+      if (!postDoc || postDoc.isDelete || postDoc.isDeleted) {
         return res.status(404).json({ message: "Post not found" });
       }
     }

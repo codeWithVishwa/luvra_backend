@@ -39,6 +39,9 @@ const userSchema = new mongoose.Schema(
     nameLower: { type: String, index: true, unique: true, sparse: true },
     // Presence tracking
     lastActiveAt: { type: Date, default: Date.now, index: true },
+    // Login tracking
+    lastIp: { type: String, default: null },
+    lastLoginAt: { type: Date, default: null },
     // Push Notifications
     pushToken: { type: String, default: null },
     pushTokenUpdatedAt: { type: Date, default: null },

@@ -183,7 +183,11 @@ export const listFeedPosts = async (req, res) => {
     const authors = Array.from(followingIds);
     authors.push(req.user._id);
 
-    const query = Post.find({ author: { $in: authors } });
+    const query = Post.find({
+      author: { $in: authors },
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    });
     
     if (before && !isNaN(before.getTime())) {
       query.where("createdAt").lt(before);
@@ -216,7 +220,11 @@ export const listUserPosts = async (req, res) => {
     
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
-    const query = Post.find({ author: userId });
+    const query = Post.find({
+      author: userId,
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    });
     if (before && !isNaN(before.getTime())) query.where("createdAt").lt(before);
     const posts = await query
       .sort({ createdAt: -1 })
@@ -234,7 +242,7 @@ export const likePost = async (req, res) => {
   try {
     const { postId } = req.params;
     const post = await Post.findById(postId);
-    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
     const already = post.likes.some((id) => String(id) === String(req.user._id));
     if (!already) {
@@ -251,7 +259,7 @@ export const unlikePost = async (req, res) => {
   try {
     const { postId } = req.params;
     const post = await Post.findById(postId);
-    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
     const beforeLength = post.likes.length;
     post.likes = post.likes.filter((id) => String(id) !== String(req.user._id));
@@ -283,8 +291,21 @@ export const listPostComments = async (req, res) => {
     const post = await Post.findById(postId)
       .select("author visibility media caption createdAt hideLikeCount commentsDisabled")
       .populate("author", "_id name avatarUrl");
-    if (!post) return res.status(404).json({ message: "Post not found" });
-    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+    if (!post || post.isDelete || post.isDeleted) {
+      return res.json({
+        comments: [],
+        nextCursor: null,
+        post: { _id: postId, unavailable: true, unavailableReason: 'deleted' },
+      });
+    }
+
+    if (!(await canViewPost(req.user._id, post))) {
+      return res.json({
+        comments: [],
+        nextCursor: null,
+        post: { _id: postId, unavailable: true, unavailableReason: 'private' },
+      });
+    }
 
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
@@ -328,7 +349,7 @@ export const addComment = async (req, res) => {
     const post = await Post.findById(postId)
       .select("author visibility caption media createdAt commentsDisabled")
       .populate("author", "_id name avatarUrl");
-    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
 
     const postAuthorId = post.author?._id || post.author;
@@ -445,7 +466,7 @@ export const updatePostSettings = async (req, res) => {
   try {
     const { postId } = req.params;
     const post = await Post.findById(postId).select("_id author hideLikeCount commentsDisabled");
-    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
     const authorId = post.author && post.author._id ? post.author._id : post.author;
     if (String(authorId) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
 
@@ -469,8 +490,8 @@ export const deleteComment = async (req, res) => {
     const comment = await Comment.findOne({ _id: commentId, post: postId }).populate("author", "_id");
     if (!comment) return res.status(404).json({ message: "Comment not found" });
 
-    const post = await Post.findById(postId).select("author");
-    if (!post) return res.status(404).json({ message: "Post not found" });
+    const post = await Post.findById(postId).select("author isDelete isDeleted");
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
 
     const isCommentAuthor = comment.author && String(comment.author._id || comment.author) === String(req.user._id);
     const postAuthorId = post.author && post.author._id ? post.author._id : post.author;

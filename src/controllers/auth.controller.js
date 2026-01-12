@@ -142,6 +142,15 @@ export const login = async (req, res) => {
       return res.status(200).json({ requiresEmailVerification: true, message: "Email not verified. Verification code sent.", user: safeUser });
     }
 
+    // Track last login ip + activity (best-effort, never block login)
+    const ipHeader = (req.headers['x-forwarded-for'] || '').toString();
+    const forwardedIp = ipHeader.split(',')[0]?.trim();
+    const ip = forwardedIp || req.ip || null;
+    user.lastIp = ip;
+    user.lastLoginAt = new Date();
+    user.lastActiveAt = new Date();
+    user.save().catch(() => {});
+
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
     const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified, nickname: user.nickname };
     return res.status(200).json({ token, user: safeUser });

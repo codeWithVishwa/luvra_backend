@@ -164,8 +164,9 @@ function toAbsoluteUrl(url) {
 
 async function viewerCanSeePost(userId, postId) {
   if (!postId) return false;
-  const post = await Post.findById(postId).select("author visibility");
+  const post = await Post.findById(postId).select("author visibility isDelete isDeleted");
   if (!post) return false;
+  if (post.isDelete || post.isDeleted) return false;
   const authorId = post.author && post.author._id ? post.author._id : post.author;
   if (String(authorId) === String(userId)) return true;
   if (post.visibility === "public") return true;
