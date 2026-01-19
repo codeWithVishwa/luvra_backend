@@ -1,7 +1,9 @@
 import express from "express";
 import path from "path";
+import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import morgan from "morgan";
 import helmet from "helmet";
 import sanitizeHtml from "sanitize-html";
@@ -20,7 +22,11 @@ import reportRoutes from "./routes/reports.routes.js";
 // If you kept express-mongo-sanitize and are on an Express-5-safe version, you can import and use it here.
 // import mongoSanitize from "express-mongo-sanitize";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Always resolve .env from Backend root (../.env), not from process.cwd().
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 const app = express();
 validateEnv();
 
@@ -58,6 +64,7 @@ app.use(
 // Parse first
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Security headers
 app.use(helmet());

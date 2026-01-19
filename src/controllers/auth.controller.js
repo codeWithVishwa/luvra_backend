@@ -6,6 +6,85 @@ import { sendEmail, buildApiUrl, buildAppUrl, getEmailHealth } from "../utils/em
 import { generateVerifyEmailTemplate, generateResetPasswordTemplate, generateVerifyEmailOtpTemplate, generateResetPasswordOtpTemplate } from "../utils/emailTemplates.js";
 import { suggestUsernames } from "../utils/nameSuggestions.js";
 
+function getWebAuthConfig() {
+  return {
+    accessTtl: process.env.JWT_ACCESS_TTL || "24h",
+    refreshDays: Number(process.env.JWT_REFRESH_DAYS || 30),
+    refreshSecret: process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+    refreshCookieName: process.env.JWT_REFRESH_COOKIE_NAME || "refresh_token",
+    refreshCookiePath: process.env.JWT_REFRESH_COOKIE_PATH || "/api/v1/auth/web",
+    refreshMaxSessions: Number(process.env.JWT_REFRESH_MAX_SESSIONS || 10),
+  };
+}
+
+function isProd() {
+  return process.env.NODE_ENV === "production";
+}
+
+function isHttpsRequest(req) {
+  if (!req) return false;
+  if (req.secure) return true;
+  const xfProto = (req.headers?.['x-forwarded-proto'] || '').toString().toLowerCase();
+  if (xfProto === 'https') return true;
+  return false;
+}
+
+function getWebRefreshCookieOptions(req) {
+  const { refreshDays, refreshCookiePath } = getWebAuthConfig();
+  const prod = isProd();
+  const isHttps = isHttpsRequest(req);
+
+  // In local dev over plain HTTP, SameSite=None cookies will be rejected by the browser (requires Secure).
+  // Force a dev-friendly cookie that will actually be stored/sent.
+  const defaultSameSite = prod ? 'none' : 'lax';
+  const configuredSameSite = (process.env.JWT_REFRESH_COOKIE_SAMESITE || defaultSameSite).toString().toLowerCase();
+  const normalizedSameSite = configuredSameSite === 'strict' ? 'strict' : configuredSameSite === 'none' ? 'none' : 'lax';
+
+  const normalizedSecure = prod ? true : isHttps;
+  const effectiveSameSite = (!prod && !isHttps && normalizedSameSite === 'none') ? 'lax' : normalizedSameSite;
+
+  const domain = process.env.JWT_REFRESH_COOKIE_DOMAIN || undefined;
+
+  return {
+    httpOnly: true,
+    secure: normalizedSecure,
+    sameSite: effectiveSameSite,
+    path: refreshCookiePath,
+    domain,
+    maxAge: refreshDays * 24 * 60 * 60 * 1000,
+  };
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function newJti() {
+  return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+}
+
+function signWebAccessToken(userId) {
+  const { accessTtl } = getWebAuthConfig();
+  return jwt.sign({ id: userId, typ: "access" }, process.env.JWT_SECRET, { expiresIn: accessTtl });
+}
+
+function signWebRefreshToken(userId) {
+  const { refreshDays, refreshSecret } = getWebAuthConfig();
+  return jwt.sign({ id: userId, typ: "refresh", jti: newJti() }, refreshSecret, { expiresIn: `${refreshDays}d` });
+}
+
+function safeUserShape(user) {
+  return {
+    _id: user._id,
+    name: user.name,
+    email: user.email,
+    verified: user.verified,
+    nickname: user.nickname,
+    avatarUrl: user.avatarUrl || null,
+    isPrivate: !!user.isPrivate,
+  };
+}
+
 const htmlPage = ({ title, heading, body, success, ctaLink, ctaText }) => `<!doctype html>
 <html lang="en">
 <head>
@@ -399,5 +478,197 @@ export const smtpHealth = async (req, res) => {
     res.status(200).json({ ok: true, health });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+};
+
+// -------------------------
+// Web-friendly auth (cookies)
+// -------------------------
+
+export const loginWeb = async (req, res) => {
+  try {
+    const { refreshDays, refreshCookieName, refreshMaxSessions } = getWebAuthConfig();
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (user.status === "suspended") {
+      return res.status(403).json({ message: "Your account has been suspended due to a violation of our policies." });
+    }
+    if (user.status === "banned") {
+      return res.status(403).json({ message: "Your account has been permanently banned for violating our policies." });
+    }
+
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(400).json({ message: "Invalid credentials" });
+
+    if (!user.verified) {
+      // Generate (or refresh) OTP for email verification
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+      user.emailVerificationOTP = otpHash;
+      user.emailVerificationOTPExpires = new Date(Date.now() + 10 * 60 * 1000);
+      await user.save();
+      sendEmail({
+        to: user.email,
+        subject: "Your verification code",
+        html: generateVerifyEmailOtpTemplate(user.name, otp),
+      }).catch((e) => console.error("[loginWeb] Verification email send failed:", e.message));
+      return res.status(200).json({ requiresEmailVerification: true, message: "Email not verified. Verification code sent.", user: safeUserShape(user) });
+    }
+
+    const accessToken = signWebAccessToken(user._id);
+    const refreshToken = signWebRefreshToken(user._id);
+
+    const tokenHash = hashToken(refreshToken);
+    const expiresAt = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
+    const userAgent = req.get("user-agent") || null;
+
+    // Use atomic update to avoid Mongoose VersionError when other endpoints update the user concurrently
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $push: {
+          refreshTokens: {
+            $each: [{ tokenHash, expiresAt, userAgent }],
+            $slice: -refreshMaxSessions,
+          },
+        },
+      }
+    );
+
+    res.cookie(refreshCookieName, refreshToken, getWebRefreshCookieOptions(req));
+    return res.status(200).json({ accessToken, user: safeUserShape(user) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const refreshWeb = async (req, res) => {
+  try {
+    const { refreshCookieName, refreshDays, refreshMaxSessions, refreshSecret } = getWebAuthConfig();
+    const refreshToken = req.cookies?.[refreshCookieName];
+    if (!refreshToken) return res.status(401).json({ message: "Missing refresh token" });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, refreshSecret);
+    } catch {
+      res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+      return res.status(401).json({ message: "Invalid refresh token" });
+    }
+
+    if (!decoded || decoded.typ !== "refresh" || !decoded.id) {
+      res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+      return res.status(401).json({ message: "Invalid refresh token" });
+    }
+
+    const user = await User.findById(decoded.id).select("_id refreshTokens");
+    if (!user) {
+      res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+      return res.status(401).json({ message: "Invalid refresh token" });
+    }
+
+    const tokenHash = hashToken(refreshToken);
+    const now = new Date();
+    const refreshTokens = Array.isArray(user.refreshTokens) ? user.refreshTokens : [];
+    const existingIndex = refreshTokens.findIndex((t) => t.tokenHash === tokenHash);
+    if (existingIndex === -1) {
+      res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+      return res.status(401).json({ message: "Refresh token not recognized" });
+    }
+
+    const existing = refreshTokens[existingIndex];
+    if (existing?.expiresAt && existing.expiresAt < now) {
+      await User.updateOne(
+        { _id: user._id },
+        { $pull: { refreshTokens: { tokenHash } } }
+      ).catch(() => {});
+      res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+      return res.status(401).json({ message: "Refresh token expired" });
+    }
+
+    // Rotate refresh token
+    const newRefreshToken = signWebRefreshToken(user._id);
+    const newTokenHash = hashToken(newRefreshToken);
+    const newExpiresAt = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
+    const userAgent = req.get("user-agent") || null;
+
+    // Atomic update avoids version conflicts with concurrent user updates (e.g., push token updates)
+    // NOTE: MongoDB forbids updating the same path in multiple operators in one update
+    // (e.g., $pull + $push on refreshTokens). Use a single pipeline update instead.
+    const rotated = await User.updateOne(
+      {
+        _id: user._id,
+        refreshTokens: {
+          $elemMatch: {
+            tokenHash,
+            ...(existing?.expiresAt ? { expiresAt: { $gte: now } } : {}),
+          },
+        },
+      },
+      [
+        {
+          $set: {
+            refreshTokens: {
+              $let: {
+                vars: {
+                  filtered: {
+                    $filter: {
+                      input: { $ifNull: ["$refreshTokens", []] },
+                      as: "t",
+                      cond: { $ne: ["$$t.tokenHash", tokenHash] },
+                    },
+                  },
+                },
+                in: {
+                  $slice: [
+                    {
+                      $concatArrays: [
+                        "$$filtered",
+                        [{ tokenHash: newTokenHash, expiresAt: newExpiresAt, userAgent }],
+                      ],
+                    },
+                    -refreshMaxSessions,
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ]
+    );
+
+    if (!rotated?.modifiedCount) {
+      // Another request likely already rotated/removed this refresh token
+      res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+      return res.status(401).json({ message: "Refresh token not recognized" });
+    }
+
+    const accessToken = signWebAccessToken(user._id);
+    res.cookie(refreshCookieName, newRefreshToken, getWebRefreshCookieOptions(req));
+    return res.status(200).json({ accessToken });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const logoutWeb = async (req, res) => {
+  try {
+    const { refreshCookieName } = getWebAuthConfig();
+    const refreshToken = req.cookies?.[refreshCookieName];
+    if (refreshToken) {
+      const tokenHash = hashToken(refreshToken);
+      await User.updateOne(
+        { refreshTokens: { $elemMatch: { tokenHash } } },
+        { $pull: { refreshTokens: { tokenHash } } }
+      ).catch(() => {});
+    }
+    res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    const { refreshCookieName } = getWebAuthConfig();
+    res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
+    res.status(500).json({ error: error.message });
   }
 };

@@ -17,6 +17,11 @@ Copy `.env.example` to `.env` (local) or set in Render dashboard:
 ```
 MONGO_URI=
 JWT_SECRET=
+JWT_ACCESS_TTL=15m                        # Optional (web access token TTL)
+JWT_REFRESH_SECRET=                      # Optional but recommended (separate secret for refresh tokens)
+JWT_REFRESH_DAYS=30                      # Optional (refresh lifetime in days)
+JWT_REFRESH_COOKIE_SAMESITE=             # Optional: lax|strict|none (prod cross-site often needs 'none')
+JWT_REFRESH_COOKIE_DOMAIN=               # Optional: e.g. .yourdomain.com
 APP_BASE_URL=http://localhost:5000        # Set to https://<render-host>.onrender.com in production
 FRONTEND_URL=luvra://                     # Deep link scheme
 CLOUDINARY_CLOUD_NAME=
@@ -26,6 +31,7 @@ RESEND_API_KEY=                           # Obtain from https://resend.com (Proj
 EMAIL_FROM=App Name <no-reply@yourdomain.com>  # Verified sending domain/address in Resend
 MAIL_DEBUG=false                          # Optional verbose logging
 DEV_EMAIL_DISABLE=false                   # Skip sending entirely when true
+DISABLE_RATE_LIMIT=true                  # Optional: disable API/auth rate limiting (dev default is disabled)
 ```
 
 ### Email Sending (Resend)
@@ -66,8 +72,21 @@ If `lastSendError` persists, verify API key/domain and check Resend dashboard lo
 - `POST /login` { email, password }
 - `POST /send-verification` { email }
 - `GET  /verify-email?token=...&email=...`
+- `POST /verify-email-otp` { email, otp }
 - `POST /forgot-password` { email }
 - `POST /reset-password?token=...&email=...` { password }
+- `POST /reset-password-otp` { email, otp, password }
+
+### Web Auth Endpoints (`/api/v1/auth/web`)
+These are designed for browser apps (React/Vite/Next.js) using an HttpOnly refresh cookie.
+
+- `POST /login` { email, password } → sets refresh cookie; returns `{ accessToken, user }`
+- `POST /refresh` → rotates refresh cookie; returns `{ accessToken }`
+- `POST /logout` → clears refresh cookie; returns `{ ok: true }`
+
+Client notes:
+- Use `credentials: 'include'` (fetch) or `withCredentials: true` (axios) so cookies are sent.
+- In production with different domains (e.g. `app.domain.com` → `api.domain.com`), you typically need HTTPS and `JWT_REFRESH_COOKIE_SAMESITE=none`.
 
 ## User Endpoints (`/api/v1/users`) [auth]
 - `GET /search?q=term`

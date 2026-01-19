@@ -67,7 +67,6 @@ async function buildFriendRecommendations(userId) {
   const me = await User.findById(userId).select("_id interests following");
   if (!me) return [];
   const myInterests = Array.isArray(me.interests) ? me.interests.filter(Boolean) : [];
-  if (!myInterests.length) return [];
 
   // Find users I have requested to follow (for private accounts)
   const requestedUsers = await User.find({ followRequests: userId }).select("_id");
@@ -82,14 +81,43 @@ async function buildFriendRecommendations(userId) {
   // Exclude people I have requested to follow
   requestedUsers.forEach(u => exclude.add(String(u._id)));
 
+  const friendEdges = await FriendRequest.find({
+    status: "accepted",
+    $or: [{ from: userId }, { to: userId }],
+  }).select("from to");
+  const viewerFriends = new Set(
+    friendEdges.map((edge) =>
+      String(edge.from) === String(userId) ? String(edge.to) : String(edge.from)
+    )
+  );
+
+  const buildFallback = async () => {
+    const fallbackUsers = await User.find({
+      _id: { $nin: Array.from(exclude) },
+    })
+      .select("_id name avatarUrl interests")
+      .sort({ createdAt: -1 })
+      .limit(15);
+    return fallbackUsers.map((user) => ({
+      _id: user._id,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      interests: user.interests,
+      overlap: 0,
+      mutualFriendCount: 0,
+    }));
+  };
+
+  if (!myInterests.length) return buildFallback();
+
   const candidates = await User.find({
     _id: { $nin: Array.from(exclude) },
     interests: { $in: myInterests },
   })
-    .select("_id name email avatarUrl interests")
+    .select("_id name avatarUrl interests")
     .limit(75);
 
-  if (!candidates.length) return [];
+  if (!candidates.length) return buildFallback();
 
   const mySet = new Set(myInterests);
   const candidateIds = candidates.map((u) => String(u._id));
@@ -121,7 +149,6 @@ async function buildFriendRecommendations(userId) {
       return {
         _id: user._id,
         name: user.name,
-        email: user.email,
         avatarUrl: user.avatarUrl,
         interests: user.interests,
         overlap,
@@ -269,52 +296,8 @@ export const searchUsers = async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
     if (!q) return res.json({ users: [] });
-    const isObjectId = /^[0-9a-fA-F]{24}$/.test(q);
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const viewerId = req.user._id;
-
-    // Search by id if query looks like an ObjectId
-    if (isObjectId) {
-      const oid = new mongoose.Types.ObjectId(q);
-      const docs = await User.aggregate([
-        { $match: { _id: oid, _id: { $ne: viewerId } } },
-        {
-          $project: {
-            name: 1,
-            nickname: 1,
-            email: 1,
-            verified: 1,
-            avatarUrl: 1,
-            isPrivate: 1,
-            followerCount: { $size: { $ifNull: ["$followers", []] } },
-            followingCount: { $size: { $ifNull: ["$following", []] } },
-            viewerIsFollower: { $in: [viewerId, { $ifNull: ["$followers", []] }] },
-            viewerRequested: { $in: [viewerId, { $ifNull: ["$followRequests", []] }] },
-            targetFollowsViewer: { $in: [viewerId, { $ifNull: ["$following", []] }] },
-          },
-        },
-        { $limit: 1 },
-      ]);
-      const users = docs.map((doc) => {
-        let followStatus = "not_following";
-        if (doc.viewerIsFollower) followStatus = "following";
-        else if (doc.viewerRequested) followStatus = "requested";
-        else if (doc.targetFollowsViewer) followStatus = "follow_back";
-        return {
-          _id: doc._id,
-          name: doc.name,
-          nickname: doc.nickname,
-          email: doc.email,
-          verified: doc.verified,
-          avatarUrl: doc.avatarUrl,
-          isPrivate: !!doc.isPrivate,
-          followerCount: doc.followerCount || 0,
-          followingCount: doc.followingCount || 0,
-          followStatus,
-        };
-      });
-      return res.json({ users });
-    }
 
     const docs = await User.aggregate([
       {
@@ -327,7 +310,6 @@ export const searchUsers = async (req, res) => {
         $project: {
           name: 1,
           nickname: 1,
-          email: 1,
           verified: 1,
           avatarUrl: 1,
           isPrivate: 1,
@@ -349,7 +331,6 @@ export const searchUsers = async (req, res) => {
         _id: doc._id,
         name: doc.name,
         nickname: doc.nickname,
-        email: doc.email,
         verified: doc.verified,
         avatarUrl: doc.avatarUrl,
         isPrivate: !!doc.isPrivate,
@@ -656,12 +637,25 @@ export const getUserBasic = async (req, res) => {
 export const getUserPublicProfile = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+    let user = null;
+    const raw = String(userId || '').trim();
+    const normalized = raw.toLowerCase();
+    const alt = normalized.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      user = await User.findById(userId).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+    }
+    if (!user) {
+      user = await User.findOne({ nameLower: normalized }).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+      if (!user && alt && alt !== normalized) {
+        user = await User.findOne({ nameLower: alt }).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+      }
+    }
     if (!user) return res.status(404).json({ message: 'User not found' });
+    const targetId = String(user._id);
     const viewerId = req.user._id;
     const [viewerProfile, postCount] = await Promise.all([
       User.findById(viewerId).select('interests'),
-      Post.countDocuments({ author: userId }),
+      Post.countDocuments({ author: targetId }),
     ]);
 
     const includesId = (list, id) => Array.isArray(list) && list.some((entry) => String(entry) === String(id));
@@ -669,7 +663,7 @@ export const getUserPublicProfile = async (req, res) => {
     const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
     const followingCount = Array.isArray(user.following) ? user.following.length : 0;
     const likedByMe = includesId(user.profileLikes, viewerId);
-    const viewerIsOwner = String(userId) === String(viewerId);
+    const viewerIsOwner = String(targetId) === String(viewerId);
     const viewerFollows = includesId(user.followers, viewerId);
     const viewerPending = includesId(user.followRequests, viewerId);
     const targetFollowsViewer = includesId(user.following, viewerId);

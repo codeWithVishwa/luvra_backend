@@ -217,16 +217,72 @@ export const listConversations = async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(50)
       .populate("participants", "_id name nickname email avatarUrl verified");
+
     const userId = String(req.user._id);
-    const withUnread = await Promise.all(
+    const withMeta = await Promise.all(
       convos.map(async (c) => {
-        const unread = await Message.countDocuments({ conversation: c._id, readBy: { $ne: userId } });
+        const [unread, last] = await Promise.all([
+          Message.countDocuments({ conversation: c._id, readBy: { $ne: userId } }),
+          Message.findOne({ conversation: c._id })
+            .sort({ createdAt: -1 })
+            .select("text type payloadType createdAt deleted")
+            .lean()
+            .catch(() => null),
+        ]);
         const obj = c.toObject();
         obj.unreadCount = unread;
+        obj.lastMessage = last
+          ? {
+              text: last.deleted ? null : last.text,
+              type: last.type,
+              payloadType: last.payloadType,
+              createdAt: last.createdAt,
+              deleted: Boolean(last.deleted),
+            }
+          : null;
         return obj;
       })
     );
-    res.json({ conversations: withUnread });
+    res.json({ conversations: withMeta });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const getConversation = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const convo = await Conversation.findById(conversationId).populate(
+      "participants",
+      "_id name nickname email avatarUrl verified"
+    );
+    if (!convo || !convo.participants.some((p) => String(p?._id || p) === String(req.user._id))) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+
+    const userId = String(req.user._id);
+    const [unread, last] = await Promise.all([
+      Message.countDocuments({ conversation: convo._id, readBy: { $ne: userId } }),
+      Message.findOne({ conversation: convo._id })
+        .sort({ createdAt: -1 })
+        .select("text type payloadType createdAt deleted")
+        .lean()
+        .catch(() => null),
+    ]);
+
+    const obj = convo.toObject();
+    obj.unreadCount = unread;
+    obj.lastMessage = last
+      ? {
+          text: last.deleted ? null : last.text,
+          type: last.type,
+          payloadType: last.payloadType,
+          createdAt: last.createdAt,
+          deleted: Boolean(last.deleted),
+        }
+      : null;
+
+    res.json({ conversation: obj });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

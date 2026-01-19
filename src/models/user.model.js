@@ -35,6 +35,16 @@ const userSchema = new mongoose.Schema(
     // Password reset via OTP
     passwordResetOTP: { type: String, default: null }, // sha256 hash of 6-digit code
     passwordResetOTPExpires: { type: Date, default: null },
+
+    // Web auth: refresh token sessions (tokens stored as sha256 hashes)
+    refreshTokens: [
+      {
+        tokenHash: { type: String, required: true },
+        createdAt: { type: Date, default: Date.now },
+        expiresAt: { type: Date, required: true },
+        userAgent: { type: String, default: null },
+      },
+    ],
     // Lowercase name for uniqueness enforcement (case-insensitive)
     nameLower: { type: String, index: true, unique: true, sparse: true },
     // Presence tracking

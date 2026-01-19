@@ -9,6 +9,9 @@ import {
 	resetPassword,
 	resetPasswordOtp,
 	changePassword,
+	loginWeb,
+	refreshWeb,
+	logoutWeb,
 	smtpHealth,
 } from "../controllers/auth.controller.js";
 import auth from "../middleware/auth.js";
@@ -25,6 +28,12 @@ router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/reset-password", authLimiter, resetPassword);
 router.post("/reset-password-otp", authLimiter, resetPasswordOtp);
 router.post("/change-password", auth, changePassword);
+
+// Web auth (cookie-based refresh + short-lived access token)
+router.post("/web/login", authLimiter, loginWeb);
+router.post("/web/refresh", authLimiter, refreshWeb);
+router.post("/web/logout", logoutWeb);
+
 router.get("/smtp-health", smtpHealth);
 
 export default router;

@@ -2,6 +2,7 @@ import express from "express";
 import auth from "../middleware/auth.js";
 import {
 	getOrCreateConversation,
+	getConversation,
 	listConversations,
 	listMessages,
 	sendMessage,
@@ -20,6 +21,7 @@ import { uploadMedia } from "../middleware/upload.js";
 const router = express.Router();
 
 router.get("/conversations", auth, listConversations);
+router.get("/conversations/:conversationId", auth, getConversation);
 router.post("/conversations/:userId", auth, getOrCreateConversation);
 router.get("/conversations/:conversationId/messages", auth, listMessages);
 router.post("/conversations/:conversationId/messages", auth, sendMessage);
