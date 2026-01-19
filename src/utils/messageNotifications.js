@@ -1,5 +1,13 @@
 import PendingNotification from "../models/pendingNotification.model.js";
 
+function toAbsoluteUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  const base = process.env.APP_BASE_URL || process.env.BASE_URL;
+  if (!base) return url;
+  return `${String(base).replace(/\/$/, "")}/${url.replace(/^\//, "")}`;
+}
+
 function toSingleLinePreview(text, maxLen = 80) {
   const raw = typeof text === "string" ? text : "";
   const oneLine = raw.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
@@ -74,7 +82,7 @@ export async function deliverPendingNotificationsOnReconnect({ io, userId, socke
     const senderUsername =
       (from && typeof from === "object" ? (from.nickname || from.name) : null) || "";
     const senderAvatarUrl =
-      (from && typeof from === "object" ? from.avatarUrl : null) || null;
+      (from && typeof from === "object" ? toAbsoluteUrl(from.avatarUrl) : null) || null;
 
     io.to(socketId).emit("message:notify", {
       senderId: String((from && typeof from === "object" ? from._id : note.fromUserId)),

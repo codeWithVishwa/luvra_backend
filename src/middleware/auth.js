@@ -8,7 +8,7 @@ export default async function auth(req, res, next) {
     if (!token) return res.status(401).json({ message: "Missing Authorization token" });
 
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(payload.id).select("_id name email verified");
+    const user = await User.findById(payload.id).select("_id name nickname email verified avatarUrl");
     if (!user) return res.status(401).json({ message: "Invalid token" });
 
     // Best-effort presence + IP update (do not block request)
