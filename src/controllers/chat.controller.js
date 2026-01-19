@@ -623,6 +623,19 @@ export const markRead = async (req, res) => {
       { conversation: conversationId, readBy: { $ne: req.user._id } },
       { $addToSet: { readBy: req.user._id } }
     );
+    const io = getIO();
+    if (io) {
+      const readerId = String(req.user._id);
+      convo.participants
+        .filter((p) => String(p) !== readerId)
+        .forEach((rid) => {
+          io.to(`user:${rid}`).emit("message:read", {
+            conversationId: String(conversationId),
+            readerId,
+            readAt: new Date().toISOString(),
+          });
+        });
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ message: e.message });
