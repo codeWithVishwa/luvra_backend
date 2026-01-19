@@ -12,7 +12,7 @@ export const generateVerifyEmailTemplate = (name, link) => {
       box-shadow:0 2px 6px rgba(0,0,0,0.1)">
       ${logoBlock}
       <div style="background:#007bff;color:white;text-align:center;padding:16px 0;font-size:20px">
-        Welcome to SnapTalk 💙
+        Welcome to Flowsnap 💙
       </div>
       <div style="padding:25px;font-size:15px;color:#333">
         <p>Hi <strong>${name || "there"}</strong>,</p>

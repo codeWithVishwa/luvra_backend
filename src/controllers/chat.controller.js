@@ -589,7 +589,7 @@ export const uploadChatMedia = async (req, res) => {
     const isAudio = mime.startsWith("audio/");
     const mediaType = isAudio ? "audio" : isVideo ? "video" : "image";
     const resourceType = mediaType === "image" ? "image" : "video";
-    const folder = `luvra/chats/${conversationId}`;
+    const folder = `flowsnap/chats/${conversationId}`;
 
     const result = await uploadBuffer(req.file.buffer, {
       folder,

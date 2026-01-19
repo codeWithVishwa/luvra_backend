@@ -1,4 +1,4 @@
-# Luvra Backend API
+# Flowsnap Backend API
 
 Express + Mongoose + Socket.IO service offering authentication, profile, real‑time chat (text + media), email verification and password reset.
 
@@ -23,7 +23,7 @@ JWT_REFRESH_DAYS=30                      # Optional (refresh lifetime in days)
 JWT_REFRESH_COOKIE_SAMESITE=             # Optional: lax|strict|none (prod cross-site often needs 'none')
 JWT_REFRESH_COOKIE_DOMAIN=               # Optional: e.g. .yourdomain.com
 APP_BASE_URL=http://localhost:5000        # Set to https://<render-host>.onrender.com in production
-FRONTEND_URL=luvra://                     # Deep link scheme
+FRONTEND_URL=flowsnap://                  # Deep link scheme
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
@@ -43,7 +43,7 @@ Make sure the domain in `EMAIL_FROM` is verified in your Resend dashboard; other
 Example production config:
 ```
 RESEND_API_KEY=re_XXXXXXXXXXXXXXXXXXXX
-EMAIL_FROM=Luvra <no-reply@yourdomain.com>
+EMAIL_FROM=Flowsnap <no-reply@yourdomain.com>
 MAIL_DEBUG=false
 ```
 

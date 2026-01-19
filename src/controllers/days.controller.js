@@ -31,7 +31,7 @@ export const createDay = async (req, res) => {
 
     const isVideo = req.file.mimetype.startsWith("video/");
     const resourceType = isVideo ? "video" : "image";
-    const folder = `luvra/days/${req.user._id}`;
+    const folder = `flowsnap/days/${req.user._id}`;
     
     const result = await uploadBuffer(req.file.buffer, {
       folder,

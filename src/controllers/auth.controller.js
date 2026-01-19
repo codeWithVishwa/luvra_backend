@@ -111,7 +111,7 @@ const htmlPage = ({ title, heading, body, success, ctaLink, ctaText }) => `<!doc
 </head>
 <body>
   <div class="shell">
-    <div class="brand">Luvra</div>
+    <div class="brand">Flowsnap</div>
     <main class="card" role="main">
       <div class="icon" aria-hidden="true">
         ${success
@@ -283,7 +283,7 @@ export const verifyEmail = async (req, res) => {
         body: "Please use the link provided in your email.",
         success: false,
   ctaLink: buildAppUrl("/"),
-  ctaText: "Open Luvra"
+  ctaText: "Open Flowsnap"
       }));
       return;
     }
@@ -302,7 +302,7 @@ export const verifyEmail = async (req, res) => {
         body: "Your verification link is invalid or has expired. Please request a new verification email.",
         success: false,
   ctaLink: buildAppUrl("/"),
-  ctaText: "Open Luvra"
+  ctaText: "Open Flowsnap"
       }));
       return;
     }
@@ -327,7 +327,7 @@ export const verifyEmail = async (req, res) => {
       body: "Please try again later.",
       success: false,
   ctaLink: buildAppUrl("/"),
-  ctaText: "Open Luvra"
+  ctaText: "Open Flowsnap"
     }));
   }
 };

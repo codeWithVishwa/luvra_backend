@@ -105,7 +105,7 @@ export const uploadPostMedia = async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file provided" });
     const isVideo = req.file.mimetype.startsWith("video/");
     const resourceType = isVideo ? "video" : "image";
-    const folder = `luvra/posts/${req.user._id}`;
+    const folder = `flowsnap/posts/${req.user._id}`;
     const result = await uploadBuffer(req.file.buffer, {
       folder,
       resource_type: resourceType,

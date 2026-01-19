@@ -94,6 +94,7 @@ async function buildFriendRecommendations(userId) {
   const buildFallback = async () => {
     const fallbackUsers = await User.find({
       _id: { $nin: Array.from(exclude) },
+      verified: true,
     })
       .select("_id name avatarUrl interests")
       .sort({ createdAt: -1 })
@@ -112,6 +113,7 @@ async function buildFriendRecommendations(userId) {
 
   const candidates = await User.find({
     _id: { $nin: Array.from(exclude) },
+    verified: true,
     interests: { $in: myInterests },
   })
     .select("_id name avatarUrl interests")
@@ -258,6 +260,7 @@ export const getChateableUsers = async (req, res) => {
     // Fetch user details
     let users = await User.find({
       _id: { $in: chateableIds },
+      verified: true,
     }).select('_id name nickname avatarUrl isPrivate').lean();
     
     // Filter by search query if provided
@@ -303,6 +306,7 @@ export const searchUsers = async (req, res) => {
       {
         $match: {
           _id: { $ne: viewerId },
+          verified: true,
           $or: [{ name: regex }, { nickname: regex }],
         },
       },
@@ -592,7 +596,7 @@ export const uploadAvatar = async (req, res) => {
       // Simpler: upload base64 data URI (avoids stream piping complexity)
       const dataUri = `data:image/webp;base64,${processed.toString('base64')}`;
       const result = await cloudinary.v2.uploader.upload(dataUri, {
-        folder: "luvra/avatars",
+        folder: "flowsnap/avatars",
         overwrite: true,
         resource_type: "image",
       });

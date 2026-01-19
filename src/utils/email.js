@@ -19,7 +19,7 @@ export async function sendEmail({ to, subject, html, text }) {
   }
   try {
     const resend = getResendClient();
-    const from = process.env.EMAIL_FROM || `Luvra <no-reply@${new URL(process.env.APP_BASE_URL || 'http://localhost').hostname}>`;
+    const from = process.env.EMAIL_FROM || `Flowsnap <no-reply@${new URL(process.env.APP_BASE_URL || 'http://localhost').hostname}>`;
     const result = await resend.emails.send({ from, to, subject, html: html || (text ? `<pre>${text}</pre>` : '') });
     mailHealth.lastSendId = result?.id || null;
     if (String(process.env.MAIL_DEBUG).toLowerCase() === 'true') {
