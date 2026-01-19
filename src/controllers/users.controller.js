@@ -85,11 +85,11 @@ async function buildFriendRecommendations(userId) {
     status: "accepted",
     $or: [{ from: userId }, { to: userId }],
   }).select("from to");
-  const viewerFriends = new Set(
-    friendEdges.map((edge) =>
-      String(edge.from) === String(userId) ? String(edge.to) : String(edge.from)
-    )
-  );
+  const viewerFriends = new Set();
+  friendEdges.forEach((edge) => {
+    const friendId = String(edge.from) === String(userId) ? String(edge.to) : String(edge.from);
+    viewerFriends.add(friendId);
+  });
 
   const buildFallback = async () => {
     const fallbackUsers = await User.find({
