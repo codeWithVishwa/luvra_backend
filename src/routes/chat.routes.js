@@ -9,6 +9,7 @@ import {
 	markRead,
 	deleteMessage,
 	deleteConversationForUser,
+	clearConversationForUser,
 	startChat,
 	listMessageRequests,
 	acceptMessageRequest,
@@ -27,6 +28,7 @@ router.get("/conversations/:conversationId/messages", auth, listMessages);
 router.post("/conversations/:conversationId/messages", auth, sendMessage);
 router.post("/conversations/:conversationId/media", auth, uploadMedia.single("media"), uploadChatMedia);
 router.post("/conversations/:conversationId/read", auth, markRead);
+router.post("/conversations/:conversationId/clear", auth, clearConversationForUser);
 router.delete("/conversations/:conversationId", auth, deleteConversationForUser);
 router.delete("/messages/:messageId", auth, deleteMessage);
 

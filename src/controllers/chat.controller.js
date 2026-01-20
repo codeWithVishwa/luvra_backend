@@ -216,14 +216,18 @@ export const listConversations = async (req, res) => {
     const convos = await Conversation.find({ participants: req.user._id, deletedFor: { $ne: req.user._id } })
       .sort({ updatedAt: -1 })
       .limit(50)
-      .populate("participants", "_id name nickname email avatarUrl verified");
+      .populate("participants", "_id name nickname email avatarUrl verified isVerified verificationType");
 
     const userId = String(req.user._id);
     const withMeta = await Promise.all(
       convos.map(async (c) => {
+        const clearedAt = Array.isArray(c.clearedFor)
+          ? c.clearedFor.find((entry) => String(entry.user) === userId)?.clearedAt
+          : null;
+        const timeFilter = clearedAt ? { createdAt: { $gte: clearedAt } } : {};
         const [unread, last] = await Promise.all([
-          Message.countDocuments({ conversation: c._id, readBy: { $ne: userId } }),
-          Message.findOne({ conversation: c._id })
+          Message.countDocuments({ conversation: c._id, readBy: { $ne: userId }, ...timeFilter }),
+          Message.findOne({ conversation: c._id, ...timeFilter })
             .sort({ createdAt: -1 })
             .select("text type payloadType createdAt deleted")
             .lean()
@@ -254,16 +258,20 @@ export const getConversation = async (req, res) => {
     const { conversationId } = req.params;
     const convo = await Conversation.findById(conversationId).populate(
       "participants",
-      "_id name nickname email avatarUrl verified"
+      "_id name nickname email avatarUrl verified isVerified verificationType"
     );
     if (!convo || !convo.participants.some((p) => String(p?._id || p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
     }
 
     const userId = String(req.user._id);
+    const clearedAt = Array.isArray(convo.clearedFor)
+      ? convo.clearedFor.find((entry) => String(entry.user) === userId)?.clearedAt
+      : null;
+    const timeFilter = clearedAt ? { createdAt: { $gte: clearedAt } } : {};
     const [unread, last] = await Promise.all([
-      Message.countDocuments({ conversation: convo._id, readBy: { $ne: userId } }),
-      Message.findOne({ conversation: convo._id })
+      Message.countDocuments({ conversation: convo._id, readBy: { $ne: userId }, ...timeFilter }),
+      Message.findOne({ conversation: convo._id, ...timeFilter })
         .sort({ createdAt: -1 })
         .select("text type payloadType createdAt deleted")
         .lean()
@@ -303,7 +311,13 @@ export const listMessages = async (req, res) => {
       if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
     }
     const q = { conversation: conversationId };
-    if (before) q.createdAt = { $lt: new Date(before) };
+    const clearedAt = Array.isArray(convo.clearedFor)
+      ? convo.clearedFor.find((entry) => String(entry.user) === String(req.user._id))?.clearedAt
+      : null;
+    const createdAt = {};
+    if (clearedAt) createdAt.$gte = clearedAt;
+    if (before) createdAt.$lt = new Date(before);
+    if (Object.keys(createdAt).length) q.createdAt = createdAt;
     
     let msgs = await Message.find(q)
       .sort({ createdAt: -1 })
@@ -619,24 +633,51 @@ export const markRead = async (req, res) => {
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
     }
-    await Message.updateMany(
-      { conversation: conversationId, readBy: { $ne: req.user._id } },
-      { $addToSet: { readBy: req.user._id } }
-    );
+    const clearedAt = Array.isArray(convo.clearedFor)
+      ? convo.clearedFor.find((entry) => String(entry.user) === String(req.user._id))?.clearedAt
+      : null;
+    const readFilter = { conversation: conversationId, readBy: { $ne: req.user._id } };
+    if (clearedAt) readFilter.createdAt = { $gte: clearedAt };
+    await Message.updateMany(readFilter, { $addToSet: { readBy: req.user._id } });
     const io = getIO();
-    if (io) {
-      const readerId = String(req.user._id);
-      convo.participants
-        .filter((p) => String(p) !== readerId)
-        .forEach((rid) => {
-          io.to(`user:${rid}`).emit("message:read", {
-            conversationId: String(conversationId),
-            readerId,
-            readAt: new Date().toISOString(),
-          });
-        });
-    }
+    const recipients = (convo.participants || []).filter((p) => String(p) !== String(req.user._id));
+    recipients.forEach((rid) => {
+      io.to(`user:${rid}`).emit("message:read", {
+        conversationId: String(convo._id),
+        readerId: String(req.user._id),
+      });
+    });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const clearConversationForUser = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
+      return res.status(404).json({ message: "Conversation not found" });
+    }
+
+    const now = new Date();
+    const userId = String(req.user._id);
+    const clearedFor = Array.isArray(convo.clearedFor) ? convo.clearedFor : [];
+    const idx = clearedFor.findIndex((entry) => String(entry.user) === userId);
+    if (idx >= 0) {
+      clearedFor[idx].clearedAt = now;
+    } else {
+      clearedFor.push({ user: req.user._id, clearedAt: now });
+    }
+    convo.clearedFor = clearedFor;
+    // Ensure conversation remains visible for this user
+    if (Array.isArray(convo.deletedFor) && convo.deletedFor.some((id) => String(id) === userId)) {
+      convo.deletedFor = convo.deletedFor.filter((id) => String(id) !== userId);
+    }
+    await convo.save();
+
+    res.json({ ok: true, clearedAt: now.toISOString() });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

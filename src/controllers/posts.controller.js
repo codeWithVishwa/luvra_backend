@@ -47,6 +47,8 @@ function serializePost(post, viewerId) {
           name: post.author.name,
           avatarUrl: post.author.avatarUrl,
           isPrivate: post.author.isPrivate,
+          isVerified: !!post.author.isVerified,
+          verificationType: post.author.verificationType || null,
         }
       : null,
     likeCount: likes.length,
@@ -72,6 +74,8 @@ function serializeComment(comment) {
           _id: comment.author._id,
           name: comment.author.name,
           avatarUrl: comment.author.avatarUrl,
+          isVerified: !!comment.author.isVerified,
+          verificationType: comment.author.verificationType || null,
         }
       : null,
     parentId,
@@ -166,7 +170,7 @@ export const createPost = async (req, res) => {
       visibility: author.isPrivate ? "private" : "public",
     });
 
-    const populated = await post.populate("author", "_id name avatarUrl isPrivate");
+    const populated = await post.populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
     res.status(201).json({ post: serializePost(populated, req.user._id) });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -195,7 +199,7 @@ export const listFeedPosts = async (req, res) => {
     const posts = await query
       .sort({ createdAt: -1 })
       .limit(limit)
-      .populate("author", "_id name avatarUrl isPrivate");
+      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
     const serialized = posts.map((p) => serializePost(p, req.user._id));
     const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt.toISOString() : null;
     res.json({ posts: serialized, nextCursor });
@@ -229,7 +233,7 @@ export const listUserPosts = async (req, res) => {
     const posts = await query
       .sort({ createdAt: -1 })
       .limit(limit)
-      .populate("author", "_id name avatarUrl isPrivate");
+      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
     const serialized = posts.map((p) => serializePost(p, req.user._id));
     const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt.toISOString() : null;
     res.json({ posts: serialized, nextCursor });
@@ -315,8 +319,8 @@ export const listPostComments = async (req, res) => {
     const comments = await query
       .sort({ createdAt: -1 })
       .limit(limit)
-      .populate("author", "_id name avatarUrl")
-      .populate({ path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } })
+      .populate("author", "_id name avatarUrl isVerified verificationType")
+      .populate({ path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl isVerified verificationType" } })
       .exec();
 
     const serialized = comments.map(serializeComment);
@@ -327,6 +331,8 @@ export const listPostComments = async (req, res) => {
       authorId: post.author?._id || post.author,
       authorName: post.author?.name,
       authorAvatar: post.author?.avatarUrl,
+      authorVerified: !!post.author?.isVerified,
+      authorVerificationType: post.author?.verificationType || null,
       caption: post.caption,
       media: previewMedia,
       createdAt: post.createdAt,
@@ -348,7 +354,7 @@ export const addComment = async (req, res) => {
 
     const post = await Post.findById(postId)
       .select("author visibility caption media createdAt commentsDisabled")
-      .populate("author", "_id name avatarUrl");
+      .populate("author", "_id name avatarUrl isVerified verificationType");
     if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
     if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
 
@@ -373,8 +379,8 @@ export const addComment = async (req, res) => {
 
     await Post.updateOne({ _id: post._id }, { $inc: { commentCount: 1 } }).catch(() => {});
     await comment.populate([
-      { path: "author", select: "_id name avatarUrl" },
-      { path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl" } },
+      { path: "author", select: "_id name avatarUrl isVerified verificationType" },
+      { path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl isVerified verificationType" } },
     ]);
 
     const mentionMatches = Array.from(new Set((text.match(/@([\w]+)/g) || []).map((token) => token.slice(1).toLowerCase())));

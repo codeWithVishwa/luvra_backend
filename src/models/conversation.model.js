@@ -21,6 +21,12 @@ const conversationSchema = new mongoose.Schema(
       },
     },
     deletedFor: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    clearedFor: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        clearedAt: { type: Date, required: true },
+      }
+    ],
   },
   { timestamps: true }
 );

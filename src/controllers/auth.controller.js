@@ -79,6 +79,8 @@ function safeUserShape(user) {
     name: user.name,
     email: user.email,
     verified: user.verified,
+    isVerified: !!user.isVerified,
+    verificationType: user.verificationType || null,
     nickname: user.nickname,
     avatarUrl: user.avatarUrl || null,
     isPrivate: !!user.isPrivate,

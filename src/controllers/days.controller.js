@@ -77,7 +77,7 @@ export const listFeedDays = async (req, res) => {
       expiresAt: { $gt: new Date() }
     })
     .sort({ createdAt: 1 }) // Oldest first within the 24h window? Or newest? Usually stories are chronological.
-    .populate("author", "_id name avatarUrl");
+    .populate("author", "_id name avatarUrl isVerified verificationType");
 
     // Group by user
     const grouped = {};

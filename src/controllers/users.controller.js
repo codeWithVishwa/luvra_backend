@@ -261,7 +261,7 @@ export const getChateableUsers = async (req, res) => {
     let users = await User.find({
       _id: { $in: chateableIds },
       verified: true,
-    }).select('_id name nickname avatarUrl isPrivate').lean();
+    }).select('_id name nickname avatarUrl isPrivate isVerified verificationType').lean();
     
     // Filter by search query if provided
     if (q) {
@@ -490,7 +490,7 @@ export const listContacts = async (req, res) => {
       status: "accepted",
     });
     const ids = accepted.map((fr) => (String(fr.from) === String(req.user._id) ? fr.to : fr.from));
-  const users = await User.find({ _id: { $in: ids } }).select("_id name email avatarUrl");
+  const users = await User.find({ _id: { $in: ids } }).select("_id name email avatarUrl isVerified verificationType");
     res.json({ contacts: users });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -499,7 +499,7 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified honorScore profileLikes isPrivate followers following");
+    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
@@ -514,6 +514,8 @@ export const getProfile = async (req, res) => {
       interests: user.interests,
       bio: user.bio,
       verified: user.verified,
+      isVerified: !!user.isVerified,
+      verificationType: user.verificationType || null,
       honorScore: user.honorScore,
       profileLikeCount,
       followerCount,
@@ -624,7 +626,7 @@ export const uploadAvatar = async (req, res) => {
 export const listOnlineUsers = async (req, res) => {
   try {
     const onlineIds = Array.from(getOnlineUsers());
-    const users = await User.find({ _id: { $in: onlineIds } }).select("_id name nickname email avatarUrl lastActiveAt");
+    const users = await User.find({ _id: { $in: onlineIds } }).select("_id name nickname email avatarUrl lastActiveAt isVerified verificationType");
     res.json({ users });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
@@ -632,7 +634,7 @@ export const listOnlineUsers = async (req, res) => {
 export const getUserBasic = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('_id name nickname avatarUrl lastActiveAt');
+    const user = await User.findById(userId).select('_id name nickname avatarUrl lastActiveAt isVerified verificationType');
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json({ user });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -646,12 +648,12 @@ export const getUserPublicProfile = async (req, res) => {
     const normalized = raw.toLowerCase();
     const alt = normalized.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (mongoose.Types.ObjectId.isValid(userId)) {
-      user = await User.findById(userId).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+      user = await User.findById(userId).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests isVerified verificationType');
     }
     if (!user) {
-      user = await User.findOne({ nameLower: normalized }).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+      user = await User.findOne({ nameLower: normalized }).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests isVerified verificationType');
       if (!user && alt && alt !== normalized) {
-        user = await User.findOne({ nameLower: alt }).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests');
+        user = await User.findOne({ nameLower: alt }).select('_id name nickname avatarUrl interests bio profileLikes isPrivate followers following followRequests isVerified verificationType');
       }
     }
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -697,6 +699,8 @@ export const getUserPublicProfile = async (req, res) => {
       profileLikeCount,
       likedByMe,
       isPrivate: !!user.isPrivate,
+      isVerified: !!user.isVerified,
+      verificationType: user.verificationType || null,
       postCount,
       canViewPosts,
       followStatus,

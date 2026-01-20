@@ -23,6 +23,11 @@ const userSchema = new mongoose.Schema(
     interests: [String],
     honorScore: { type: Number, default: 50 },
     verified: { type: Boolean, default: false },
+    // Platform verification (admin-only)
+    isVerified: { type: Boolean, default: false },
+    verificationType: { type: String, enum: ['official', 'creator', 'developer'], default: null },
+    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
+    verifiedAt: { type: Date, default: null },
     // Email verification
     emailVerificationToken: { type: String, default: null }, // stored as sha256 hash
     emailVerificationExpires: { type: Date, default: null },
