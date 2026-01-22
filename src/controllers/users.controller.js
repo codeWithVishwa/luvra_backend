@@ -504,7 +504,11 @@ export const getProfile = async (req, res) => {
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
     const followingCount = Array.isArray(user.following) ? user.following.length : 0;
-    const postCount = await Post.countDocuments({ author: user._id });
+    const postCount = await Post.countDocuments({
+      author: user._id,
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    });
     res.json({ user: {
       _id: user._id,
       name: user.name,
@@ -565,7 +569,11 @@ export const updateProfile = async (req, res) => {
     if (visibilityChanged) {
       await Post.updateMany({ author: user._id }, { visibility: user.isPrivate ? 'private' : 'public' }).catch(() => {});
     }
-    const postCount = await Post.countDocuments({ author: user._id });
+    const postCount = await Post.countDocuments({
+      author: user._id,
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    });
     res.json({
       user: {
         _id: user._id,
@@ -661,7 +669,11 @@ export const getUserPublicProfile = async (req, res) => {
     const viewerId = req.user._id;
     const [viewerProfile, postCount] = await Promise.all([
       User.findById(viewerId).select('interests'),
-      Post.countDocuments({ author: targetId }),
+      Post.countDocuments({
+        author: targetId,
+        isDelete: { $ne: true },
+        isDeleted: { $ne: true },
+      }),
     ]);
 
     const includesId = (list, id) => Array.isArray(list) && list.some((entry) => String(entry) === String(id));
