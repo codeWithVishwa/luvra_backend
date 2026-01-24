@@ -3,7 +3,6 @@ import mongoose from "mongoose";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import Post from "../models/post.model.js";
-import mongoose from "mongoose";
 import crypto from "crypto";
 import { getIO, getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 import { sendPushNotification } from "../utils/expoPush.js";
