@@ -1,4 +1,5 @@
 import Conversation from "../models/conversation.model.js";
+import mongoose from "mongoose";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import Post from "../models/post.model.js";
@@ -222,7 +223,10 @@ export const createGroupConversation = async (req, res) => {
     const trimmed = typeof name === 'string' ? name.trim() : '';
     if (!trimmed) return res.status(400).json({ message: "Group name is required" });
 
-    const ids = new Set([String(req.user._id), ...(Array.isArray(participantIds) ? participantIds.map(String) : [])]);
+    const rawIds = [String(req.user._id), ...(Array.isArray(participantIds) ? participantIds.map(String) : [])];
+    const invalidIds = rawIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length) return res.status(400).json({ message: "One or more users are invalid" });
+    const ids = new Set(rawIds);
     if (ids.size < 2) return res.status(400).json({ message: "At least 2 members are required" });
 
     const validUsers = await User.find({ _id: { $in: Array.from(ids) } }).select('_id');
@@ -277,6 +281,8 @@ export const addGroupMembers = async (req, res) => {
 
     const current = new Set((convo.participants || []).map((id) => String(id)));
     const toAdd = Array.isArray(memberIds) ? memberIds.map(String) : [];
+    const invalidIds = toAdd.filter((id) => !mongoose.Types.ObjectId.isValid(id));
+    if (invalidIds.length) return res.status(400).json({ message: "One or more users are invalid" });
     const merged = new Set([...current, ...toAdd]);
     if (merged.size < 2) return res.status(400).json({ message: "At least 2 members are required" });
 
