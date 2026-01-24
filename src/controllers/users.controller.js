@@ -546,8 +546,6 @@ export const getProfile = async (req, res) => {
     const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
-    const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
-    const followingCount = Array.isArray(user.following) ? user.following.length : 0;
     const [postCount, followerCount, followingCount] = await Promise.all([
       Post.countDocuments({
         author: user._id,
