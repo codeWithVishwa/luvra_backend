@@ -139,3 +139,42 @@ export const generateResetPasswordOtpTemplate = (name, code) => {
 `;
 };
 
+export const generateVaultPinResetOtpTemplate = (name, code) => {
+  const logoUrl = process.env.EMAIL_LOGO_URL || 'https://res.cloudinary.com/dli1zwoz8/image/upload/v1763968442/icon_h8kza6.png';
+  const logoBlock = logoUrl
+    ? `<div style="text-align:center;padding:26px 0 8px"><img src='${logoUrl}' alt='Logo' style='width:88px;height:auto;display:inline-block;border-radius:16px' /></div>`
+    : '';
+  return `
+  <div style="font-family:'Segoe UI',sans-serif;background:#0d0d0d;padding:30px">
+    <div style="max-width:600px;margin:auto;background:#1a1a1a;border-radius:14px;overflow:hidden;
+      border:1px solid rgba(168,19,166,0.35);
+      box-shadow:0 0 25px rgba(168,19,166,0.35)">
+      ${logoBlock}
+      <div style="background:#a813a6ff;color:white;text-align:center;padding:18px 0;
+        font-size:22px;font-weight:600;letter-spacing:1px">
+        Message Vault PIN Reset
+      </div>
+
+      <div style="padding:30px;font-size:15px;color:#e6e6e6;line-height:1.7">
+        <p style="margin:0 0 12px">Hi <strong>${name || 'there'}</strong>,</p>
+
+        <p style="margin:0 0 22px;color:#cccccc">
+          Use the code below inside the app to reset your Message Vault PIN:
+        </p>
+
+        <div style="text-align:center;margin:28px 0;font-size:36px;letter-spacing:8px;
+          font-weight:700;color:#a813a6ff;
+          text-shadow:0 0 12px rgba(168,19,166,0.9), 0 0 20px rgba(168,19,166,0.6)">
+          ${code}
+        </div>
+
+        <p style="font-size:13px;color:#888;margin-top:25px">
+          This code expires in 10 minutes. If you did not request this, you can ignore this email.
+        </p>
+      </div>
+
+    </div>
+  </div>
+`;
+};
+

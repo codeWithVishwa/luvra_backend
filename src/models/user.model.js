@@ -40,6 +40,9 @@ const userSchema = new mongoose.Schema(
     // Password reset via OTP
     passwordResetOTP: { type: String, default: null }, // sha256 hash of 6-digit code
     passwordResetOTPExpires: { type: Date, default: null },
+    // Vault PIN reset via OTP
+    vaultPinResetOTP: { type: String, default: null },
+    vaultPinResetOTPExpires: { type: Date, default: null },
 
     // Web auth: refresh token sessions (tokens stored as sha256 hashes)
     refreshTokens: [

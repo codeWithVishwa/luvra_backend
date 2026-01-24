@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import User from "../models/user.model.js";
 import { sendEmail, buildApiUrl, buildAppUrl, getEmailHealth } from "../utils/email.js";
-import { generateVerifyEmailTemplate, generateResetPasswordTemplate, generateVerifyEmailOtpTemplate, generateResetPasswordOtpTemplate } from "../utils/emailTemplates.js";
+import { generateVerifyEmailTemplate, generateResetPasswordTemplate, generateVerifyEmailOtpTemplate, generateResetPasswordOtpTemplate, generateVaultPinResetOtpTemplate } from "../utils/emailTemplates.js";
 import { suggestUsernames } from "../utils/nameSuggestions.js";
 
 function getWebAuthConfig() {
@@ -471,6 +471,64 @@ export const changePassword = async (req, res) => {
     res.status(200).json({ message: "Password changed successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+// Vault PIN reset via OTP (requires auth)
+export const requestVaultPinResetOtp = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user.email) return res.status(400).json({ message: "Email is required to reset vault PIN" });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+    user.vaultPinResetOTP = otpHash;
+    user.vaultPinResetOTPExpires = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+
+    sendEmail({
+      to: user.email,
+      subject: "Your Message Vault PIN reset code",
+      html: generateVaultPinResetOtpTemplate(user.name, otp),
+    }).catch(e => console.error("[vaultPinReset] Email send failed:", e.message));
+
+    res.status(200).json({ message: "Vault PIN reset code sent" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to send vault PIN reset code" });
+  }
+};
+
+export const verifyVaultPinResetOtp = async (req, res) => {
+  try {
+    const userId = req.user?._id;
+    const { otp } = req.body;
+    if (!userId) return res.status(401).json({ message: "Unauthorized" });
+    if (!otp) return res.status(400).json({ message: "OTP code is required" });
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user.vaultPinResetOTP || !user.vaultPinResetOTPExpires) {
+      return res.status(400).json({ message: "No active reset code. Request a new one." });
+    }
+    if (user.vaultPinResetOTPExpires < new Date()) {
+      return res.status(400).json({ message: "Reset code expired. Request a new one." });
+    }
+
+    const otpHash = crypto.createHash("sha256").update(String(otp)).digest("hex");
+    if (otpHash !== user.vaultPinResetOTP) {
+      return res.status(400).json({ message: "Invalid reset code" });
+    }
+
+    user.vaultPinResetOTP = null;
+    user.vaultPinResetOTPExpires = null;
+    await user.save();
+
+    res.status(200).json({ message: "Vault PIN reset verified" });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to verify vault PIN reset" });
   }
 };
 

@@ -31,6 +31,13 @@ function isCloudinaryConfigured() {
   return Boolean(cfg.cloud_name && cfg.api_key && cfg.api_secret);
 }
 
+const ACTIVE_VERIFIED_USER = { verified: true, status: 'active' };
+
+async function countActiveVerifiedUsers(ids = []) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  return User.countDocuments({ _id: { $in: ids }, ...ACTIVE_VERIFIED_USER });
+}
+
 async function getBlockStatus(userId, otherId) {
   const [me, other] = await Promise.all([
     User.findById(userId).select('_id blockedUsers'),
@@ -94,7 +101,7 @@ async function buildFriendRecommendations(userId) {
   const buildFallback = async () => {
     const fallbackUsers = await User.find({
       _id: { $nin: Array.from(exclude) },
-      verified: true,
+      ...ACTIVE_VERIFIED_USER,
     })
       .select("_id name avatarUrl interests")
       .sort({ createdAt: -1 })
@@ -113,7 +120,7 @@ async function buildFriendRecommendations(userId) {
 
   const candidates = await User.find({
     _id: { $nin: Array.from(exclude) },
-    verified: true,
+    ...ACTIVE_VERIFIED_USER,
     interests: { $in: myInterests },
   })
     .select("_id name avatarUrl interests")
@@ -260,7 +267,7 @@ export const getChateableUsers = async (req, res) => {
     // Fetch user details
     let users = await User.find({
       _id: { $in: chateableIds },
-      verified: true,
+      ...ACTIVE_VERIFIED_USER,
     }).select('_id name nickname avatarUrl isPrivate isVerified verificationType').lean();
     
     // Filter by search query if provided
@@ -307,6 +314,7 @@ export const searchUsers = async (req, res) => {
         $match: {
           _id: { $ne: viewerId },
           verified: true,
+          status: 'active',
           $or: [{ name: regex }, { nickname: regex }],
         },
       },
@@ -317,11 +325,47 @@ export const searchUsers = async (req, res) => {
           verified: 1,
           avatarUrl: 1,
           isPrivate: 1,
-          followerCount: { $size: { $ifNull: ["$followers", []] } },
-          followingCount: { $size: { $ifNull: ["$following", []] } },
-          viewerIsFollower: { $in: [viewerId, { $ifNull: ["$followers", []] }] },
-          viewerRequested: { $in: [viewerId, { $ifNull: ["$followRequests", []] }] },
-          targetFollowsViewer: { $in: [viewerId, { $ifNull: ["$following", []] }] },
+          followers: { $ifNull: ["$followers", []] },
+          following: { $ifNull: ["$following", []] },
+          followRequests: { $ifNull: ["$followRequests", []] },
+        },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'followers',
+          foreignField: '_id',
+          as: 'followersDocs',
+          pipeline: [
+            { $match: { verified: true, status: 'active' } },
+            { $project: { _id: 1 } },
+          ],
+        },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'following',
+          foreignField: '_id',
+          as: 'followingDocs',
+          pipeline: [
+            { $match: { verified: true, status: 'active' } },
+            { $project: { _id: 1 } },
+          ],
+        },
+      },
+      {
+        $project: {
+          name: 1,
+          nickname: 1,
+          verified: 1,
+          avatarUrl: 1,
+          isPrivate: 1,
+          followerCount: { $size: { $ifNull: ["$followersDocs", []] } },
+          followingCount: { $size: { $ifNull: ["$followingDocs", []] } },
+          viewerIsFollower: { $in: [viewerId, "$followers"] },
+          viewerRequested: { $in: [viewerId, "$followRequests"] },
+          targetFollowsViewer: { $in: [viewerId, "$following"] },
         },
       },
       { $limit: 20 },
@@ -504,11 +548,15 @@ export const getProfile = async (req, res) => {
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
     const followingCount = Array.isArray(user.following) ? user.following.length : 0;
-    const postCount = await Post.countDocuments({
-      author: user._id,
-      isDelete: { $ne: true },
-      isDeleted: { $ne: true },
-    });
+    const [postCount, followerCount, followingCount] = await Promise.all([
+      Post.countDocuments({
+        author: user._id,
+        isDelete: { $ne: true },
+        isDeleted: { $ne: true },
+      }),
+      countActiveVerifiedUsers(user.followers),
+      countActiveVerifiedUsers(user.following),
+    ]);
     res.json({ user: {
       _id: user._id,
       name: user.name,
@@ -667,19 +715,21 @@ export const getUserPublicProfile = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
     const targetId = String(user._id);
     const viewerId = req.user._id;
-    const [viewerProfile, postCount] = await Promise.all([
+    const [viewerProfile, postCount, followerCount, followingCount] = await Promise.all([
       User.findById(viewerId).select('interests'),
       Post.countDocuments({
         author: targetId,
         isDelete: { $ne: true },
         isDeleted: { $ne: true },
       }),
+      countActiveVerifiedUsers(user.followers),
+      countActiveVerifiedUsers(user.following),
     ]);
 
     const includesId = (list, id) => Array.isArray(list) && list.some((entry) => String(entry) === String(id));
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
-    const followerCount = Array.isArray(user.followers) ? user.followers.length : 0;
-    const followingCount = Array.isArray(user.following) ? user.following.length : 0;
+    const followerCountSafe = Number.isFinite(followerCount) ? followerCount : 0;
+    const followingCountSafe = Number.isFinite(followingCount) ? followingCount : 0;
     const likedByMe = includesId(user.profileLikes, viewerId);
     const viewerIsOwner = String(targetId) === String(viewerId);
     const viewerFollows = includesId(user.followers, viewerId);
@@ -706,8 +756,8 @@ export const getUserPublicProfile = async (req, res) => {
       avatarUrl: user.avatarUrl,
       interests: user.interests,
       bio: user.bio,
-      followerCount,
-      followingCount,
+      followerCount: followerCountSafe,
+      followingCount: followingCountSafe,
       profileLikeCount,
       likedByMe,
       isPrivate: !!user.isPrivate,
@@ -834,7 +884,8 @@ export const getFollowersList = async (req, res) => {
     
     // Populate followers
     const followers = await User.find({
-      _id: { $in: targetUser.followers }
+      _id: { $in: targetUser.followers },
+      ...ACTIVE_VERIFIED_USER,
     }).select('_id name avatarUrl').lean();
     
     res.json({ users: followers });
@@ -862,7 +913,8 @@ export const getFollowingList = async (req, res) => {
     
     // Populate following
     const following = await User.find({
-      _id: { $in: targetUser.following }
+      _id: { $in: targetUser.following },
+      ...ACTIVE_VERIFIED_USER,
     }).select('_id name avatarUrl').lean();
     
     res.json({ users: following });

@@ -9,6 +9,8 @@ import {
 	resetPassword,
 	resetPasswordOtp,
 	changePassword,
+	requestVaultPinResetOtp,
+	verifyVaultPinResetOtp,
 	loginWeb,
 	refreshWeb,
 	logoutWeb,
@@ -28,6 +30,8 @@ router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/reset-password", authLimiter, resetPassword);
 router.post("/reset-password-otp", authLimiter, resetPasswordOtp);
 router.post("/change-password", auth, changePassword);
+router.post("/vault-pin-reset-request", auth, requestVaultPinResetOtp);
+router.post("/vault-pin-reset-verify", auth, verifyVaultPinResetOtp);
 
 // Web auth (cookie-based refresh + short-lived access token)
 router.post("/web/login", authLimiter, loginWeb);
