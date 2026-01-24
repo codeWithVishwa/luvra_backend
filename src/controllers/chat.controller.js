@@ -3,6 +3,7 @@ import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
 import Post from "../models/post.model.js";
 import mongoose from "mongoose";
+import crypto from "crypto";
 import { getIO, getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 import { sendPushNotification } from "../utils/expoPush.js";
 import { buildMessageNotifyPayload, enqueuePendingMessageNotification } from "../utils/messageNotifications.js";
@@ -35,6 +36,10 @@ function ensureParticipants(userId, otherId) {
   const a = String(userId);
   const b = String(otherId);
   return a < b ? [a, b] : [b, a];
+}
+
+function newInviteCode() {
+  return crypto.randomBytes(9).toString("base64url");
 }
 
 async function getInteractionBlock(userId, otherId) {
@@ -211,6 +216,221 @@ export const getOrCreateConversation = async (req, res) => {
   }
 };
 
+export const createGroupConversation = async (req, res) => {
+  try {
+    const { name, participantIds = [], photoUrl = null } = req.body;
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) return res.status(400).json({ message: "Group name is required" });
+
+    const ids = new Set([String(req.user._id), ...(Array.isArray(participantIds) ? participantIds.map(String) : [])]);
+    if (ids.size < 2) return res.status(400).json({ message: "At least 2 members are required" });
+
+    const validUsers = await User.find({ _id: { $in: Array.from(ids) } }).select('_id');
+    if (validUsers.length !== ids.size) return res.status(400).json({ message: "One or more users are invalid" });
+
+    const convo = await Conversation.create({
+      isGroup: true,
+      name: trimmed,
+      photoUrl,
+      participants: Array.from(ids),
+      admins: [req.user._id],
+      createdBy: req.user._id,
+      inviteCode: newInviteCode(),
+      inviteEnabled: true,
+    });
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.status(201).json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const updateGroupConversation = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { name, photoUrl, inviteEnabled } = req.body;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+    const isAdmin = convo.admins?.some((id) => String(id) === String(req.user._id));
+    if (!isAdmin) return res.status(403).json({ message: "Admin access required" });
+
+    if (typeof name === 'string') convo.name = name.trim() || convo.name;
+    if (typeof photoUrl === 'string' || photoUrl === null) convo.photoUrl = photoUrl;
+    if (typeof inviteEnabled === 'boolean') convo.inviteEnabled = inviteEnabled;
+
+    await convo.save();
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const addGroupMembers = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { memberIds = [] } = req.body;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+    const isAdmin = convo.admins?.some((id) => String(id) === String(req.user._id));
+    if (!isAdmin) return res.status(403).json({ message: "Admin access required" });
+
+    const current = new Set((convo.participants || []).map((id) => String(id)));
+    const toAdd = Array.isArray(memberIds) ? memberIds.map(String) : [];
+    const merged = new Set([...current, ...toAdd]);
+    if (merged.size < 2) return res.status(400).json({ message: "At least 2 members are required" });
+
+    const validUsers = await User.find({ _id: { $in: Array.from(merged) } }).select('_id');
+    if (validUsers.length !== merged.size) return res.status(400).json({ message: "One or more users are invalid" });
+
+    convo.participants = Array.from(merged);
+    await convo.save();
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const removeGroupMember = async (req, res) => {
+  try {
+    const { conversationId, memberId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+    const isAdmin = convo.admins?.some((id) => String(id) === String(req.user._id));
+    if (!isAdmin) return res.status(403).json({ message: "Admin access required" });
+
+    const memberIdStr = String(memberId);
+    const participants = (convo.participants || []).map((id) => String(id));
+    if (!participants.includes(memberIdStr)) return res.status(404).json({ message: "Member not found" });
+
+    const admins = (convo.admins || []).map((id) => String(id));
+    const removingAdmin = admins.includes(memberIdStr);
+    const remainingAdmins = admins.filter((id) => id !== memberIdStr);
+    if (removingAdmin && remainingAdmins.length === 0) {
+      return res.status(400).json({ message: "Cannot remove the last admin" });
+    }
+
+    convo.participants = participants.filter((id) => id !== memberIdStr);
+    convo.admins = remainingAdmins;
+    await convo.save();
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const addGroupAdmin = async (req, res) => {
+  try {
+    const { conversationId, memberId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+    const isAdmin = convo.admins?.some((id) => String(id) === String(req.user._id));
+    if (!isAdmin) return res.status(403).json({ message: "Admin access required" });
+
+    const memberIdStr = String(memberId);
+    if (!convo.participants.some((id) => String(id) === memberIdStr)) {
+      return res.status(404).json({ message: "Member not found" });
+    }
+    const admins = new Set((convo.admins || []).map((id) => String(id)));
+    admins.add(memberIdStr);
+    convo.admins = Array.from(admins);
+    await convo.save();
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const removeGroupAdmin = async (req, res) => {
+  try {
+    const { conversationId, memberId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+    const isAdmin = convo.admins?.some((id) => String(id) === String(req.user._id));
+    if (!isAdmin) return res.status(403).json({ message: "Admin access required" });
+
+    const admins = (convo.admins || []).map((id) => String(id));
+    const memberIdStr = String(memberId);
+    const remainingAdmins = admins.filter((id) => id !== memberIdStr);
+    if (remainingAdmins.length === 0) return res.status(400).json({ message: "At least one admin is required" });
+
+    convo.admins = remainingAdmins;
+    await convo.save();
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const leaveGroup = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+
+    const userId = String(req.user._id);
+    const participants = (convo.participants || []).map((id) => String(id));
+    if (!participants.includes(userId)) return res.status(404).json({ message: "Member not found" });
+
+    const admins = (convo.admins || []).map((id) => String(id));
+    const removingAdmin = admins.includes(userId);
+    const remainingAdmins = admins.filter((id) => id !== userId);
+    if (removingAdmin && remainingAdmins.length === 0 && participants.length > 1) {
+      return res.status(400).json({ message: "Assign another admin before leaving" });
+    }
+
+    convo.participants = participants.filter((id) => id !== userId);
+    convo.admins = remainingAdmins;
+
+    if (convo.participants.length === 0) {
+      await Conversation.deleteOne({ _id: convo._id });
+      await Message.deleteMany({ conversation: convo._id }).catch(() => {});
+      return res.json({ left: true, deleted: true });
+    }
+
+    await convo.save();
+    res.json({ left: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const generateGroupInvite = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const convo = await Conversation.findById(conversationId);
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Group not found" });
+    const isAdmin = convo.admins?.some((id) => String(id) === String(req.user._id));
+    if (!isAdmin) return res.status(403).json({ message: "Admin access required" });
+    convo.inviteCode = newInviteCode();
+    convo.inviteEnabled = true;
+    await convo.save();
+    res.json({ inviteCode: convo.inviteCode });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const joinGroupByInvite = async (req, res) => {
+  try {
+    const { inviteCode } = req.params;
+    const convo = await Conversation.findOne({ inviteCode, inviteEnabled: true });
+    if (!convo || !convo.isGroup) return res.status(404).json({ message: "Invite not found" });
+    const participants = new Set((convo.participants || []).map((id) => String(id)));
+    participants.add(String(req.user._id));
+    convo.participants = Array.from(participants);
+    await convo.save();
+    const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 export const listConversations = async (req, res) => {
   try {
     const convos = await Conversation.find({ participants: req.user._id, deletedFor: { $ne: req.user._id } })
@@ -304,11 +524,13 @@ export const listMessages = async (req, res) => {
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
     }
-    const others = convo.participants.filter((p) => String(p) !== String(req.user._id));
-    for (const participant of others) {
-      const blockStatus = await getInteractionBlock(req.user._id, participant);
-      if (blockStatus.notFound) return res.status(404).json({ message: "User not found" });
-      if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+    if (!convo.isGroup) {
+      const others = convo.participants.filter((p) => String(p) !== String(req.user._id));
+      for (const participant of others) {
+        const blockStatus = await getInteractionBlock(req.user._id, participant);
+        if (blockStatus.notFound) return res.status(404).json({ message: "User not found" });
+        if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+      }
     }
     const q = { conversation: conversationId };
     const clearedAt = Array.isArray(convo.clearedFor)
@@ -410,9 +632,12 @@ export const sendMessage = async (req, res) => {
     if (!convo || !convo.participants.some((p) => String(p) === String(req.user._id))) {
       return res.status(404).json({ message: "Conversation not found" });
     }
-    const receiverId = convo.participants.find((p) => String(p) !== String(req.user._id));
-    const blockStatus = await getInteractionBlock(req.user._id, receiverId);
-    if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+    const isGroup = !!convo.isGroup;
+    const receiverId = isGroup ? null : convo.participants.find((p) => String(p) !== String(req.user._id));
+    if (!isGroup) {
+      const blockStatus = await getInteractionBlock(req.user._id, receiverId);
+      if (blockStatus.blocked) return res.status(403).json({ message: blockStatus.message });
+    }
 
     const messageData = {
       conversation: conversationId,

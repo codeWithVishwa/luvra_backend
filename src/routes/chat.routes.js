@@ -16,6 +16,15 @@ import {
 	rejectMessageRequest,
 	uploadChatMedia,
   replyFromNotification,
+	createGroupConversation,
+	updateGroupConversation,
+	addGroupMembers,
+	removeGroupMember,
+	leaveGroup,
+	generateGroupInvite,
+	joinGroupByInvite,
+	addGroupAdmin,
+	removeGroupAdmin,
 } from "../controllers/chat.controller.js";
 import { uploadMedia } from "../middleware/upload.js";
 
@@ -31,6 +40,17 @@ router.post("/conversations/:conversationId/read", auth, markRead);
 router.post("/conversations/:conversationId/clear", auth, clearConversationForUser);
 router.delete("/conversations/:conversationId", auth, deleteConversationForUser);
 router.delete("/messages/:messageId", auth, deleteMessage);
+
+// Group chat
+router.post("/conversations/group", auth, createGroupConversation);
+router.patch("/conversations/:conversationId/group", auth, updateGroupConversation);
+router.post("/conversations/:conversationId/group/members", auth, addGroupMembers);
+router.delete("/conversations/:conversationId/group/members/:memberId", auth, removeGroupMember);
+router.post("/conversations/:conversationId/group/admins/:memberId", auth, addGroupAdmin);
+router.delete("/conversations/:conversationId/group/admins/:memberId", auth, removeGroupAdmin);
+router.post("/conversations/:conversationId/group/leave", auth, leaveGroup);
+router.post("/conversations/:conversationId/group/invite", auth, generateGroupInvite);
+router.post("/conversations/group/join/:inviteCode", auth, joinGroupByInvite);
 
 router.post("/start/:targetUserId", auth, startChat);
 router.get("/requests", auth, listMessageRequests);
