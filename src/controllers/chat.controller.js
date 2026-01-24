@@ -550,6 +550,7 @@ export const listMessages = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(Number(limit))
       .select("text type mediaUrl mediaDuration post sharedProfile sender receiver createdAt deleted deletedAt readBy ciphertext nonce payloadType")
+        .populate({ path: "sender", select: "name nickname avatarUrl isVerified verificationType" })
       .populate({
         path: "post",
         select: "caption media author visibility isDelete createdAt",
