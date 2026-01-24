@@ -30,6 +30,17 @@ import { uploadMedia } from "../middleware/upload.js";
 
 const router = express.Router();
 
+// Group chat (place before /conversations/:userId to avoid route clash with "group")
+router.post("/conversations/group", auth, createGroupConversation);
+router.post("/conversations/group/join/:inviteCode", auth, joinGroupByInvite);
+router.patch("/conversations/:conversationId/group", auth, updateGroupConversation);
+router.post("/conversations/:conversationId/group/members", auth, addGroupMembers);
+router.delete("/conversations/:conversationId/group/members/:memberId", auth, removeGroupMember);
+router.post("/conversations/:conversationId/group/admins/:memberId", auth, addGroupAdmin);
+router.delete("/conversations/:conversationId/group/admins/:memberId", auth, removeGroupAdmin);
+router.post("/conversations/:conversationId/group/leave", auth, leaveGroup);
+router.post("/conversations/:conversationId/group/invite", auth, generateGroupInvite);
+
 router.get("/conversations", auth, listConversations);
 router.get("/conversations/:conversationId", auth, getConversation);
 router.post("/conversations/:userId", auth, getOrCreateConversation);
@@ -40,17 +51,6 @@ router.post("/conversations/:conversationId/read", auth, markRead);
 router.post("/conversations/:conversationId/clear", auth, clearConversationForUser);
 router.delete("/conversations/:conversationId", auth, deleteConversationForUser);
 router.delete("/messages/:messageId", auth, deleteMessage);
-
-// Group chat
-router.post("/conversations/group", auth, createGroupConversation);
-router.patch("/conversations/:conversationId/group", auth, updateGroupConversation);
-router.post("/conversations/:conversationId/group/members", auth, addGroupMembers);
-router.delete("/conversations/:conversationId/group/members/:memberId", auth, removeGroupMember);
-router.post("/conversations/:conversationId/group/admins/:memberId", auth, addGroupAdmin);
-router.delete("/conversations/:conversationId/group/admins/:memberId", auth, removeGroupAdmin);
-router.post("/conversations/:conversationId/group/leave", auth, leaveGroup);
-router.post("/conversations/:conversationId/group/invite", auth, generateGroupInvite);
-router.post("/conversations/group/join/:inviteCode", auth, joinGroupByInvite);
 
 router.post("/start/:targetUserId", auth, startChat);
 router.get("/requests", auth, listMessageRequests);
