@@ -395,10 +395,11 @@ export const addGroupAdmin = async (req, res) => {
     if (!convo.participants.some((id) => String(id) === memberIdStr)) {
       return res.status(404).json({ message: "Member not found" });
     }
-    const admins = new Set((convo.admins || []).map((id) => String(id)));
-    admins.add(memberIdStr);
-    convo.admins = Array.from(admins);
-    await convo.save();
+    await Conversation.findByIdAndUpdate(
+      convo._id,
+      { $addToSet: { admins: memberIdStr } },
+      { new: false }
+    );
     const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
     res.json({ conversation: populated });
   } catch (e) {
@@ -419,8 +420,11 @@ export const removeGroupAdmin = async (req, res) => {
     const remainingAdmins = admins.filter((id) => id !== memberIdStr);
     if (remainingAdmins.length === 0) return res.status(400).json({ message: "At least one admin is required" });
 
-    convo.admins = remainingAdmins;
-    await convo.save();
+    await Conversation.findByIdAndUpdate(
+      convo._id,
+      { $set: { admins: remainingAdmins } },
+      { new: false }
+    );
     const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
     res.json({ conversation: populated });
   } catch (e) {
