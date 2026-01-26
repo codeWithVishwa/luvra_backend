@@ -2,6 +2,7 @@ import Conversation from "../models/conversation.model.js";
 import mongoose from "mongoose";
 import Message from "../models/message.model.js";
 import User from "../models/user.model.js";
+import GroupInvite from "../models/groupInvite.model.js";
 import Post from "../models/post.model.js";
 import crypto from "crypto";
 import { getIO, getOnlineUsers, getSocketIdsForUser } from "../socket.js";
@@ -40,6 +41,29 @@ function ensureParticipants(userId, otherId) {
 
 function newInviteCode() {
   return crypto.randomBytes(9).toString("base64url");
+}
+
+async function createPendingGroupInvites({ conversationId, inviterId, inviteeIds = [] }) {
+  const created = [];
+  for (const inviteeId of inviteeIds) {
+    try {
+      const existing = await GroupInvite.findOne({ conversation: conversationId, invitee: inviteeId, status: "pending" }).select("_id");
+      if (existing) continue;
+      const invite = await GroupInvite.create({
+        conversation: conversationId,
+        inviter: inviterId,
+        invitee: inviteeId,
+        status: "pending",
+      });
+      created.push(invite);
+    } catch (e) {
+      // Ignore duplicate key errors for pending invites
+      if (e?.code !== 11000) {
+        throw e;
+      }
+    }
+  }
+  return created;
 }
 
 async function getInteractionBlock(userId, otherId) {
@@ -226,23 +250,41 @@ export const createGroupConversation = async (req, res) => {
     const invalidIds = rawIds.filter((id) => !mongoose.Types.ObjectId.isValid(id));
     if (invalidIds.length) return res.status(400).json({ message: "One or more users are invalid" });
     const ids = new Set(rawIds);
-    if (ids.size < 2) return res.status(400).json({ message: "At least 2 members are required" });
 
-    const validUsers = await User.find({ _id: { $in: Array.from(ids) } }).select('_id');
+    const validUsers = await User.find({ _id: { $in: Array.from(ids) } }).select('_id name allowGroupAdds');
     if (validUsers.length !== ids.size) return res.status(400).json({ message: "One or more users are invalid" });
+
+    const allowedIds = new Set([String(req.user._id)]);
+    const skipped = [];
+    validUsers.forEach((u) => {
+      const id = String(u._id);
+      if (id === String(req.user._id)) return;
+      if (u.allowGroupAdds === false) {
+        skipped.push({ _id: u._id, name: u.name });
+      } else {
+        allowedIds.add(id);
+      }
+    });
 
     const convo = await Conversation.create({
       isGroup: true,
       name: trimmed,
       photoUrl,
-      participants: Array.from(ids),
+      participants: Array.from(allowedIds),
       admins: [req.user._id],
       createdBy: req.user._id,
       inviteCode: newInviteCode(),
       inviteEnabled: true,
     });
+    if (skipped.length) {
+      await createPendingGroupInvites({
+        conversationId: convo._id,
+        inviterId: req.user._id,
+        inviteeIds: skipped.map((u) => u._id),
+      });
+    }
     const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
-    res.status(201).json({ conversation: populated });
+    res.status(201).json({ conversation: populated, skipped });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -282,16 +324,31 @@ export const addGroupMembers = async (req, res) => {
     const toAdd = Array.isArray(memberIds) ? memberIds.map(String) : [];
     const invalidIds = toAdd.filter((id) => !mongoose.Types.ObjectId.isValid(id));
     if (invalidIds.length) return res.status(400).json({ message: "One or more users are invalid" });
-    const merged = new Set([...current, ...toAdd]);
-    if (merged.size < 2) return res.status(400).json({ message: "At least 2 members are required" });
+    const validUsers = await User.find({ _id: { $in: Array.from(toAdd) } }).select('_id name allowGroupAdds');
+    if (validUsers.length !== toAdd.length) return res.status(400).json({ message: "One or more users are invalid" });
 
-    const validUsers = await User.find({ _id: { $in: Array.from(merged) } }).select('_id');
-    if (validUsers.length !== merged.size) return res.status(400).json({ message: "One or more users are invalid" });
+    const allowedToAdd = [];
+    const skipped = [];
+    validUsers.forEach((u) => {
+      if (u.allowGroupAdds === false) {
+        skipped.push({ _id: u._id, name: u.name });
+      } else {
+        allowedToAdd.push(String(u._id));
+      }
+    });
 
+    const merged = new Set([...current, ...allowedToAdd]);
     convo.participants = Array.from(merged);
     await convo.save();
+    if (skipped.length) {
+      await createPendingGroupInvites({
+        conversationId: convo._id,
+        inviterId: req.user._id,
+        inviteeIds: skipped.map((u) => u._id),
+      });
+    }
     const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
-    res.json({ conversation: populated });
+    res.json({ conversation: populated, skipped });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -431,6 +488,55 @@ export const joinGroupByInvite = async (req, res) => {
     await convo.save();
     const populated = await Conversation.findById(convo._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
     res.json({ conversation: populated });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listGroupInvites = async (req, res) => {
+  try {
+    const invites = await GroupInvite.find({ invitee: req.user._id, status: "pending" })
+      .sort({ createdAt: -1 })
+      .populate("conversation", "_id name photoUrl isGroup participants")
+      .populate("inviter", "_id name nickname avatarUrl isVerified verificationType");
+
+    res.json({ invites });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const respondGroupInvite = async (req, res) => {
+  try {
+    const { inviteId } = req.params;
+    const action = String(req.body?.action || '').toLowerCase();
+    if (!['accept', 'decline'].includes(action)) {
+      return res.status(400).json({ message: "Action must be accept or decline" });
+    }
+
+    const invite = await GroupInvite.findOne({ _id: inviteId, invitee: req.user._id });
+    if (!invite) return res.status(404).json({ message: "Invite not found" });
+    if (invite.status !== 'pending') {
+      return res.status(400).json({ message: "Invite already handled" });
+    }
+
+    let conversation = null;
+    if (action === 'accept') {
+      conversation = await Conversation.findById(invite.conversation);
+      if (!conversation || !conversation.isGroup) {
+        return res.status(404).json({ message: "Group not found" });
+      }
+      const participants = new Set((conversation.participants || []).map((id) => String(id)));
+      participants.add(String(req.user._id));
+      conversation.participants = Array.from(participants);
+      await conversation.save();
+      conversation = await Conversation.findById(conversation._id).populate("participants", "_id name nickname avatarUrl verified isVerified verificationType");
+    }
+
+    invite.status = action === 'accept' ? 'accepted' : 'declined';
+    await invite.save();
+
+    res.json({ invite, conversation });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

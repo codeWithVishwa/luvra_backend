@@ -25,6 +25,8 @@ import {
 	joinGroupByInvite,
 	addGroupAdmin,
 	removeGroupAdmin,
+	listGroupInvites,
+	respondGroupInvite,
 } from "../controllers/chat.controller.js";
 import { uploadMedia } from "../middleware/upload.js";
 
@@ -40,6 +42,8 @@ router.post("/conversations/:conversationId/group/admins/:memberId", auth, addGr
 router.delete("/conversations/:conversationId/group/admins/:memberId", auth, removeGroupAdmin);
 router.post("/conversations/:conversationId/group/leave", auth, leaveGroup);
 router.post("/conversations/:conversationId/group/invite", auth, generateGroupInvite);
+router.get("/group-invites", auth, listGroupInvites);
+router.post("/group-invites/:inviteId/respond", auth, respondGroupInvite);
 
 router.get("/conversations", auth, listConversations);
 router.get("/conversations/:conversationId", auth, getConversation);

@@ -17,6 +17,7 @@ const userSchema = new mongoose.Schema(
       createdAt: { type: Date, default: Date.now },
     },
   ],
+  allowGroupAdds: { type: Boolean, default: true },
   encryptionPublicKey: { type: String, default: null },
   nickname: { type: String, trim: true, maxlength: 40, default: null },
   bio: { type: String, trim: true, maxlength: 300 },

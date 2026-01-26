@@ -543,7 +543,7 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following");
+    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following allowGroupAdds");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const [postCount, followerCount, followingCount] = await Promise.all([
@@ -571,6 +571,7 @@ export const getProfile = async (req, res) => {
       followerCount,
       followingCount,
       isPrivate: !!user.isPrivate,
+      allowGroupAdds: user.allowGroupAdds !== false,
       postCount,
     } });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -580,13 +581,23 @@ export const updateProfile = async (req, res) => {
   try {
     const { name, nickname, interests, bio } = req.body;
     const isPrivateProvided = Object.prototype.hasOwnProperty.call(req.body, 'isPrivate');
+    const allowGroupAddsProvided = Object.prototype.hasOwnProperty.call(req.body, 'allowGroupAdds');
     let nextPrivate;
+    let nextAllowGroupAdds;
     if (isPrivateProvided) {
       const value = req.body.isPrivate;
       if (typeof value === 'string') {
         nextPrivate = value === 'true' || value === '1';
       } else {
         nextPrivate = !!value;
+      }
+    }
+    if (allowGroupAddsProvided) {
+      const value = req.body.allowGroupAdds;
+      if (typeof value === 'string') {
+        nextAllowGroupAdds = value === 'true' || value === '1';
+      } else {
+        nextAllowGroupAdds = !!value;
       }
     }
     const user = await User.findById(req.user._id);
@@ -611,6 +622,9 @@ export const updateProfile = async (req, res) => {
       user.isPrivate = nextPrivate;
       visibilityChanged = true;
     }
+    if (allowGroupAddsProvided && typeof nextAllowGroupAdds === 'boolean') {
+      user.allowGroupAdds = nextAllowGroupAdds;
+    }
     await user.save();
     if (visibilityChanged) {
       await Post.updateMany({ author: user._id }, { visibility: user.isPrivate ? 'private' : 'public' }).catch(() => {});
@@ -630,6 +644,7 @@ export const updateProfile = async (req, res) => {
         interests: user.interests,
         bio: user.bio,
         isPrivate: !!user.isPrivate,
+        allowGroupAdds: user.allowGroupAdds !== false,
         postCount,
       }
     });

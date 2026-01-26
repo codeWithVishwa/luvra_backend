@@ -7,10 +7,26 @@ const conversationSchema = new mongoose.Schema(
       validate: {
         validator: function (value) {
           if (!Array.isArray(value)) return false;
-          if (this.isGroup) return value.length >= 2;
+          const inferredGroup =
+            this.isGroup === true ||
+            (this.isGroup == null &&
+              (!!this.name ||
+                !!this.inviteCode ||
+                (Array.isArray(this.admins) && this.admins.length > 0)));
+          if (inferredGroup) return value.length >= 1;
           return value.length === 2;
         },
-        message: "Direct conversations require exactly two participants",
+        message: function () {
+          const inferredGroup =
+            this.isGroup === true ||
+            (this.isGroup == null &&
+              (!!this.name ||
+                !!this.inviteCode ||
+                (Array.isArray(this.admins) && this.admins.length > 0)));
+          return inferredGroup
+            ? "Group conversations must have at least one participant"
+            : "Direct conversations require exactly two participants";
+        },
       },
     },
     isGroup: { type: Boolean, default: false },
