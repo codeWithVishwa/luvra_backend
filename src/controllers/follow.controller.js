@@ -198,6 +198,25 @@ export const unfollowUser = async (req, res) => {
   }
 };
 
+export const removeFollower = async (req, res) => {
+  try {
+    const { userId, followerId } = req.params;
+    ensureOwnership(req.user._id, userId);
+    if (idsEqual(userId, followerId)) {
+      return res.status(400).json({ message: "Cannot remove yourself" });
+    }
+
+    await Promise.all([
+      User.findByIdAndUpdate(userId, { $pull: { followers: followerId, followRequests: followerId } }),
+      User.findByIdAndUpdate(followerId, { $pull: { following: userId } }),
+    ]);
+
+    res.json({ status: "removed" });
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ message: e.message });
+  }
+};
+
 export const getFollowRequests = async (req, res) => {
   try {
     const { userId } = req.params;

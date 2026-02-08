@@ -237,7 +237,7 @@ export const login = async (req, res) => {
     user.lastActiveAt = new Date();
     user.save().catch(() => {});
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "120d" });
     const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified, nickname: user.nickname };
     return res.status(200).json({ token, user: safeUser });
   } catch (error) {
