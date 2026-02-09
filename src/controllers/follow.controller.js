@@ -207,8 +207,12 @@ export const removeFollower = async (req, res) => {
     }
 
     await Promise.all([
-      User.findByIdAndUpdate(userId, { $pull: { followers: followerId, followRequests: followerId } }),
-      User.findByIdAndUpdate(followerId, { $pull: { following: userId } }),
+      User.findByIdAndUpdate(userId, {
+        $pull: { followers: followerId, followRequests: followerId, following: followerId },
+      }),
+      User.findByIdAndUpdate(followerId, {
+        $pull: { following: userId, followers: userId },
+      }),
     ]);
 
     res.json({ status: "removed" });
