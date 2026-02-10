@@ -8,7 +8,7 @@ const messageSchema = new mongoose.Schema(
     text: { type: String, default: "" },
     type: {
       type: String,
-      enum: ["text", "image", "video", "audio", "post", "profile"],
+      enum: ["text", "image", "video", "audio", "post", "profile", "call"],
       default: "text",
     },
     mediaUrl: { type: String, default: null },
