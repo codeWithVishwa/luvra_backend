@@ -356,8 +356,9 @@ export const verifyEmailOtp = async (req, res) => {
     user.emailVerificationOTP = null;
     user.emailVerificationOTPExpires = null;
     await user.save();
-    const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified };
-    res.status(200).json({ message: "Email verified successfully", user: safeUser });
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "120d" });
+    const safeUser = { _id: user._id, name: user.name, email: user.email, verified: user.verified, nickname: user.nickname };
+    res.status(200).json({ message: "Email verified successfully", token, user: safeUser });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
