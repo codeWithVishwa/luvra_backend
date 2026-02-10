@@ -10,6 +10,7 @@ import {
   listPostComments,
   listFeedPosts,
   listUserPosts,
+  listTrendingPosts,
   unlikePost,
   uploadPostMedia,
   updatePostSettings,
@@ -20,6 +21,7 @@ const router = express.Router();
 router.post("/media", auth, uploadMedia.single("media"), uploadPostMedia);
 router.post("/", auth, createPost);
 router.get("/feed", auth, listFeedPosts);
+router.get("/trending", auth, listTrendingPosts);
 router.get("/user/:userId", auth, listUserPosts);
 router.post("/:postId/like", auth, likePost);
 router.delete("/:postId/like", auth, unlikePost);

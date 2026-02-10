@@ -208,6 +208,47 @@ export const listFeedPosts = async (req, res) => {
   }
 };
 
+export const listTrendingPosts = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 8, 20);
+    const hours = Math.min(parseInt(req.query.hours, 10) || 48, 72);
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+
+    const candidates = await Post.find({
+      createdAt: { $gte: since },
+      visibility: "public",
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    })
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .populate("author", "_id name avatarUrl");
+
+    const scored = candidates
+      .map((post) => {
+        const likes = Array.isArray(post.likes) ? post.likes.length : 0;
+        const comments = typeof post.commentCount === "number" ? post.commentCount : 0;
+        const shares = 0;
+        const score = likes * 2 + comments * 3 + shares * 4;
+        const thumbnail = post.media?.[0]?.url || null;
+        return {
+          post_id: post._id,
+          thumbnail,
+          authorAvatar: post.author?.avatarUrl || null,
+          created_at: post.createdAt,
+          score,
+        };
+      })
+      .filter((item) => !!item.thumbnail)
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, limit);
+
+    res.json({ posts: scored });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 export const listUserPosts = async (req, res) => {
   try {
     const { userId } = req.params;
