@@ -7,6 +7,10 @@ let io;
 // Presence set (kept for existing features like presence:update)
 const onlineUsers = new Set();
 
+// Active audio call tracking (in-memory)
+const activeCalls = new Map(); // callId -> { callerId, calleeId, createdAt }
+const userActiveCall = new Map(); // userId -> callId
+
 // Requirement: maintain in-memory map userId -> socketId
 // Note: users may connect from multiple devices; we store a Set of socketIds.
 const userSocketIds = new Map();
@@ -18,6 +22,30 @@ export function initSocket(server) {
       credentials: true,
     },
   });
+
+  const registerCall = (callId, callerId, calleeId) => {
+    const entry = { callId, callerId: String(callerId), calleeId: String(calleeId), createdAt: Date.now() };
+    activeCalls.set(String(callId), entry);
+    userActiveCall.set(String(callerId), String(callId));
+    userActiveCall.set(String(calleeId), String(callId));
+    return entry;
+  };
+
+  const clearCall = (callId) => {
+    const entry = activeCalls.get(String(callId));
+    if (!entry) return null;
+    userActiveCall.delete(String(entry.callerId));
+    userActiveCall.delete(String(entry.calleeId));
+    activeCalls.delete(String(callId));
+    return entry;
+  };
+
+  const getOtherParty = (entry, userId) => {
+    const uid = String(userId);
+    if (String(entry.callerId) === uid) return entry.calleeId;
+    if (String(entry.calleeId) === uid) return entry.callerId;
+    return null;
+  };
 
   io.on("connection", async (socket) => {
     const userId = socket.handshake.auth?.userId || socket.handshake.query?.userId;
@@ -65,6 +93,94 @@ export function initSocket(server) {
       }
     }
 
+    socket.on("call:invite", (payload) => {
+      const callId = payload?.callId;
+      const fromUserId = payload?.fromUserId;
+      const toUserId = payload?.toUserId;
+      if (!callId || !fromUserId || !toUserId) return;
+
+      const fromId = String(fromUserId);
+      const toId = String(toUserId);
+      const existingForCallee = userActiveCall.get(toId);
+      const existingForCaller = userActiveCall.get(fromId);
+      if (existingForCallee || existingForCaller) {
+        socket.emit("call:busy", { callId, toUserId: toId, fromUserId: fromId });
+        return;
+      }
+
+      registerCall(callId, fromId, toId);
+
+      io.to(`user:${toId}`).emit("call:incoming", {
+        callId,
+        fromUserId: fromId,
+        toUserId: toId,
+        conversationId: payload?.conversationId || null,
+        fromName: payload?.fromName || null,
+        fromAvatar: payload?.fromAvatar || null,
+      });
+    });
+
+    socket.on("call:accept", (payload) => {
+      const callId = payload?.callId;
+      const fromUserId = payload?.fromUserId;
+      const toUserId = payload?.toUserId;
+      if (!callId || !fromUserId || !toUserId) return;
+      const entry = activeCalls.get(String(callId));
+      if (!entry) return;
+      const fromId = String(fromUserId);
+      const toId = String(toUserId);
+      if (!getOtherParty(entry, fromId)) return;
+      io.to(`user:${toId}`).emit("call:accepted", { callId, fromUserId: fromId, toUserId: toId });
+    });
+
+    socket.on("call:reject", (payload) => {
+      const callId = payload?.callId;
+      const fromUserId = payload?.fromUserId;
+      const toUserId = payload?.toUserId;
+      if (!callId || !fromUserId || !toUserId) return;
+      const entry = activeCalls.get(String(callId));
+      if (!entry) return;
+      clearCall(callId);
+      io.to(`user:${String(toUserId)}`).emit("call:rejected", {
+        callId,
+        fromUserId: String(fromUserId),
+        toUserId: String(toUserId),
+      });
+    });
+
+    socket.on("call:signal", (payload) => {
+      const callId = payload?.callId;
+      const fromUserId = payload?.fromUserId;
+      const toUserId = payload?.toUserId;
+      if (!callId || !fromUserId || !toUserId) return;
+      const entry = activeCalls.get(String(callId));
+      if (!entry) return;
+      const fromId = String(fromUserId);
+      const expectedOther = getOtherParty(entry, fromId);
+      if (!expectedOther || String(expectedOther) !== String(toUserId)) return;
+      io.to(`user:${String(toUserId)}`).emit("call:signal", {
+        callId,
+        fromUserId: fromId,
+        toUserId: String(toUserId),
+        data: payload?.data || null,
+      });
+    });
+
+    socket.on("call:end", (payload) => {
+      const callId = payload?.callId;
+      const fromUserId = payload?.fromUserId;
+      const toUserId = payload?.toUserId;
+      if (!callId || !fromUserId || !toUserId) return;
+      const entry = clearCall(callId);
+      if (!entry) return;
+      io.to(`user:${String(toUserId)}`).emit("call:ended", {
+        callId,
+        fromUserId: String(fromUserId),
+        toUserId: String(toUserId),
+        reason: payload?.reason || "ended",
+      });
+    });
+
     socket.on("disconnect", () => {
       if (userId) {
         // 3) Remove socketId from map; user is offline only when all sockets are gone
@@ -78,6 +194,22 @@ export function initSocket(server) {
         // Check if still any sockets in room
         const room = io.sockets.adapter.rooms.get(`user:${userId}`);
         if (!room || room.size === 0) {
+          const callId = userActiveCall.get(uid);
+          if (callId) {
+            const entry = clearCall(callId);
+            if (entry) {
+              const otherId = getOtherParty(entry, uid);
+              if (otherId) {
+                io.to(`user:${String(otherId)}`).emit("call:ended", {
+                  callId,
+                  fromUserId: uid,
+                  toUserId: String(otherId),
+                  reason: "disconnect",
+                });
+              }
+            }
+          }
+
           onlineUsers.delete(uid);
           const ts = new Date();
           User.findByIdAndUpdate(userId, { lastActiveAt: ts }).catch(()=>{});
