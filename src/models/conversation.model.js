@@ -71,7 +71,10 @@ conversationSchema.pre("validate", function (next) {
 });
 
 conversationSchema.index({ participants: 1 });
-conversationSchema.index({ inviteCode: 1 }, { unique: true, sparse: true });
+conversationSchema.index(
+  { inviteCode: 1 },
+  { unique: true, partialFilterExpression: { inviteCode: { $type: "string" } } }
+);
 // Unique index already created by `unique: true` on directPairKey; no need to add another.
 conversationSchema.index({ updatedAt: -1 });
 
