@@ -34,7 +34,7 @@ const conversationSchema = new mongoose.Schema(
     photoUrl: { type: String, default: null },
     admins: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
-    inviteCode: { type: String, default: null },
+    inviteCode: { type: String, trim: true, default: undefined },
     inviteEnabled: { type: Boolean, default: true },
     directPairKey: { type: String, unique: true, sparse: true },
     sessionKeyVersion: { type: Number, default: 1 },
@@ -73,7 +73,12 @@ conversationSchema.pre("validate", function (next) {
 conversationSchema.index({ participants: 1 });
 conversationSchema.index(
   { inviteCode: 1 },
-  { unique: true, partialFilterExpression: { inviteCode: { $type: "string" } } }
+  {
+    unique: true,
+    partialFilterExpression: {
+      inviteCode: { $exists: true, $type: "string", $ne: "" },
+    },
+  }
 );
 // Unique index already created by `unique: true` on directPairKey; no need to add another.
 conversationSchema.index({ updatedAt: -1 });
