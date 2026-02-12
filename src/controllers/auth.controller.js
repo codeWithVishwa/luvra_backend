@@ -208,6 +208,9 @@ export const login = async (req, res) => {
     if (user.status === "banned") {
       return res.status(403).json({ message: "Your account has been permanently banned for violating our policies." });
     }
+    if (user.status === "deactivated") {
+      return res.status(403).json({ message: "Your account is deactivated. Reactivate it by contacting support." });
+    }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(400).json({ message: "Invalid credentials" });
@@ -558,6 +561,9 @@ export const loginWeb = async (req, res) => {
     }
     if (user.status === "banned") {
       return res.status(403).json({ message: "Your account has been permanently banned for violating our policies." });
+    }
+    if (user.status === "deactivated") {
+      return res.status(403).json({ message: "Your account is deactivated. Reactivate it by contacting support." });
     }
 
     const valid = await bcrypt.compare(password, user.password);

@@ -1,6 +1,6 @@
 import express from "express";
 import auth from "../middleware/auth.js";
-import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications, markAllNotificationsRead, getChateableUsers, getFollowersList, getFollowingList, updatePushToken, clearPushToken, getMyPushTokenStatus } from "../controllers/users.controller.js";
+import { searchUsers, sendFriendRequest, listFriendRequests, respondFriendRequest, listContacts, getProfile, updateProfile, uploadAvatar, listOnlineUsers, removeFriend, recommendFriends, getUserBasic, getUserPublicProfile, toggleProfileLike, listProfileLikers, listBlockedUsers, blockUser, unblockUser, listNotifications, markAllNotificationsRead, getChateableUsers, getFollowersList, getFollowingList, updatePushToken, clearPushToken, getMyPushTokenStatus, deactivateAccount, deleteAccount } from "../controllers/users.controller.js";
 import { followUser, unfollowUser, getFollowRequests, acceptFollowRequest, rejectFollowRequest, removeFollower } from "../controllers/follow.controller.js";
 import { uploadEncryptionPublicKey, getEncryptionPublicKey } from "../controllers/encryption.controller.js";
 import { upload } from "../middleware/upload.js";
@@ -22,6 +22,8 @@ router.delete("/contacts/:userId", auth, removeFriend);
 router.get("/me", auth, getProfile);
 router.patch("/me", auth, updateProfile);
 router.post("/me/avatar", auth, upload.single('avatar'), uploadAvatar);
+router.post("/me/deactivate", auth, deactivateAccount);
+router.delete("/me", auth, deleteAccount);
 router.get("/online", auth, listOnlineUsers);
 router.get("/recommend", auth, recommendFriends);
 router.get("/basic/:userId", auth, getUserBasic);

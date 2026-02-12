@@ -1010,3 +1010,81 @@ export const getMyPushTokenStatus = async (req, res) => {
   }
 };
 
+function buildDeletedEmail(userId) {
+  const token = crypto.randomBytes(6).toString('hex');
+  return `deleted+${String(userId)}+${Date.now()}+${token}@deleted.local`;
+}
+
+function buildDeletedName(userId) {
+  const token = crypto.randomBytes(4).toString('hex');
+  return `DeletedUser_${String(userId).slice(-6)}_${token}`;
+}
+
+export const deactivateAccount = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (user.status === 'deactivated') {
+      return res.status(200).json({ ok: true, status: 'deactivated' });
+    }
+
+    user.status = 'deactivated';
+    user.deactivatedAt = new Date();
+    user.pushToken = null;
+    user.pushTokenUpdatedAt = null;
+    user.refreshTokens = [];
+
+    await user.save();
+    return res.status(200).json({ ok: true, status: 'deactivated' });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const deletedName = buildDeletedName(userId);
+    const deletedEmail = buildDeletedEmail(userId);
+
+    await Promise.all([
+      FriendRequest.deleteMany({ $or: [{ from: userId }, { to: userId }] }),
+      User.updateMany({ followers: userId }, { $pull: { followers: userId } }),
+      User.updateMany({ following: userId }, { $pull: { following: userId } }),
+      User.updateMany({ followRequests: userId }, { $pull: { followRequests: userId } }),
+      User.updateMany({ blockedUsers: userId }, { $pull: { blockedUsers: userId } }),
+      User.updateMany({ profileLikes: userId }, { $pull: { profileLikes: userId } }),
+      User.updateMany({ 'messageRequests.from': userId }, { $pull: { messageRequests: { from: userId } } }),
+    ]);
+
+    user.status = 'deactivated';
+    user.isDeleted = true;
+    user.deletedAt = new Date();
+    user.deactivatedAt = user.deactivatedAt || new Date();
+    user.email = deletedEmail;
+    user.name = deletedName;
+    user.nickname = null;
+    user.bio = null;
+    user.avatarUrl = null;
+    user.followers = [];
+    user.following = [];
+    user.followRequests = [];
+    user.messageRequests = [];
+    user.blockedUsers = [];
+    user.profileLikes = [];
+    user.pushToken = null;
+    user.pushTokenUpdatedAt = null;
+    user.refreshTokens = [];
+
+    await user.save();
+    return res.status(200).json({ ok: true, status: 'deleted' });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
