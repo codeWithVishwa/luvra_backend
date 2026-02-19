@@ -19,6 +19,12 @@ const userSchema = new mongoose.Schema(
   ],
   allowGroupAdds: { type: Boolean, default: true },
   allowLocationDiscovery: { type: Boolean, default: false },
+  savedPosts: [
+    {
+      post: { type: mongoose.Schema.Types.ObjectId, ref: 'Post', required: true },
+      savedAt: { type: Date, default: Date.now },
+    },
+  ],
   location: {
     type: { type: String, enum: ["Point"], default: "Point" },
     coordinates: { type: [Number], default: undefined },
@@ -93,6 +99,7 @@ userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
 userSchema.index({ followRequests: 1 });
 userSchema.index({ 'messageRequests.from': 1 });
+userSchema.index({ 'savedPosts.post': 1 });
 userSchema.index({ location: "2dsphere" });
 
 userSchema.pre('save', function(next) {

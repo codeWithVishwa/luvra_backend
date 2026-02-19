@@ -757,6 +757,37 @@ export const listNearbyUsers = async (req, res) => {
       { $limit: limit },
     ]);
 
+    const candidateIds = docs.map((doc) => doc._id);
+    const mutualCounts = candidateIds.reduce((acc, id) => ({ ...acc, [String(id)]: 0 }), {});
+    const viewerFriendEdges = await FriendRequest.find({
+      status: "accepted",
+      $or: [{ from: viewerId }, { to: viewerId }],
+    }).select("from to");
+    const viewerFriends = new Set();
+    viewerFriendEdges.forEach((edge) => {
+      const friendId = String(edge.from) === String(viewerId) ? String(edge.to) : String(edge.from);
+      viewerFriends.add(friendId);
+    });
+    if (viewerFriends.size && candidateIds.length) {
+      const viewerFriendList = Array.from(viewerFriends);
+      const mutualEdges = await FriendRequest.find({
+        status: "accepted",
+        $or: [
+          { from: { $in: candidateIds }, to: { $in: viewerFriendList } },
+          { to: { $in: candidateIds }, from: { $in: viewerFriendList } },
+        ],
+      }).select("from to");
+      mutualEdges.forEach((edge) => {
+        const fromId = String(edge.from);
+        const toId = String(edge.to);
+        if (candidateIds.includes(fromId) && viewerFriends.has(toId)) {
+          mutualCounts[fromId] += 1;
+        } else if (candidateIds.includes(toId) && viewerFriends.has(fromId)) {
+          mutualCounts[toId] += 1;
+        }
+      });
+    }
+
     const users = docs.map((doc) => {
       let followStatus = "not_following";
       if (doc.viewerIsFollower) followStatus = "following";
@@ -772,6 +803,7 @@ export const listNearbyUsers = async (req, res) => {
         location: Array.isArray(doc?.location?.coordinates) && doc.location.coordinates.length === 2
           ? { lng: doc.location.coordinates[0], lat: doc.location.coordinates[1] }
           : null,
+        mutualFriendCount: mutualCounts[String(doc._id)] || 0,
         followStatus,
       };
     });

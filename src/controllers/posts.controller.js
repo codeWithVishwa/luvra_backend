@@ -57,7 +57,7 @@ async function getFollowingIds(userId) {
   return ids;
 }
 
-function serializePost(post, viewerId) {
+function serializePost(post, viewerId, savedSet) {
   const likes = Array.isArray(post.likes) ? post.likes.map((id) => String(id)) : [];
   return {
     _id: post._id,
@@ -65,6 +65,9 @@ function serializePost(post, viewerId) {
     media: post.media,
     visibility: post.visibility,
     createdAt: post.createdAt,
+    durationSeconds: Array.isArray(post.media)
+      ? post.media.find((m) => m?.type === "video" && Number.isFinite(m?.durationSeconds))?.durationSeconds
+      : undefined,
     commentCount: typeof post.commentCount === "number" ? post.commentCount : 0,
     hideLikeCount: !!post.hideLikeCount,
     commentsDisabled: !!post.commentsDisabled,
@@ -80,7 +83,19 @@ function serializePost(post, viewerId) {
       : null,
     likeCount: likes.length,
     likedByMe: viewerId ? likes.includes(String(viewerId)) : false,
+    savedByMe: savedSet ? savedSet.has(String(post._id)) : false,
   };
+}
+
+function isVideoPost(post) {
+  return Array.isArray(post?.media) && post.media.some((m) => m?.type === "video" && m?.url);
+}
+
+async function getSavedSetForUser(userId) {
+  if (!userId) return new Set();
+  const user = await User.findById(userId).select("savedPosts");
+  const saved = Array.isArray(user?.savedPosts) ? user.savedPosts : [];
+  return new Set(saved.map((item) => String(item.post || item?._id)).filter(Boolean));
 }
 
 function serializeComment(comment) {
@@ -241,7 +256,7 @@ export const createPost = async (req, res) => {
     });
 
     const populated = await post.populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
-    res.status(201).json({ post: serializePost(populated, req.user._id) });
+    res.status(201).json({ post: serializePost(populated, req.user._id, new Set()) });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -251,6 +266,7 @@ export const listFeedPosts = async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
+    const savedSet = await getSavedSetForUser(req.user._id);
     
     // Feed consists of posts from people I follow + my own posts
     const followingIds = await getFollowingIds(req.user._id);
@@ -283,6 +299,7 @@ export const listTrendingPosts = async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 8, 20);
     const hours = Math.min(parseInt(req.query.hours, 10) || 48, 72);
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const savedSet = await getSavedSetForUser(req.user._id);
 
     const candidates = await Post.find({
       createdAt: { $gte: since },
@@ -309,7 +326,7 @@ export const listTrendingPosts = async (req, res) => {
           thumbnail,
           authorAvatar: post.author?.avatarUrl || null,
           created_at: post.createdAt,
-          clip: serializePost(post, req.user._id),
+          clip: serializePost(post, req.user._id, savedSet),
           score,
         };
       })
@@ -329,6 +346,7 @@ export const searchClips = async (req, res) => {
     if (!q) return res.json({ posts: [] });
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 40);
     const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const savedSet = await getSavedSetForUser(req.user._id);
 
     const posts = await Post.find({
       caption: regex,
@@ -341,7 +359,7 @@ export const searchClips = async (req, res) => {
       .limit(limit)
       .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
 
-    const serialized = posts.map((p) => serializePost(p, req.user._id));
+    const serialized = posts.map((p) => serializePost(p, req.user._id, savedSet));
     res.json({ posts: serialized });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -353,6 +371,7 @@ export const listUserPosts = async (req, res) => {
     const { userId } = req.params;
     const target = await User.findById(userId).select("_id isPrivate");
     if (!target) return res.status(404).json({ message: "User not found" });
+    const savedSet = await getSavedSetForUser(req.user._id);
     
     // If target is private and not me, I must be following them to see posts
     if (String(userId) !== String(req.user._id) && target.isPrivate) {
@@ -374,7 +393,7 @@ export const listUserPosts = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
-    const serialized = posts.map((p) => serializePost(p, req.user._id));
+    const serialized = posts.map((p) => serializePost(p, req.user._id, savedSet));
     const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt.toISOString() : null;
     res.json({ posts: serialized, nextCursor });
   } catch (e) {
@@ -487,6 +506,7 @@ export const listPostComments = async (req, res) => {
       }
     }
     const nextCursor = comments.length === limit ? comments[comments.length - 1].createdAt.toISOString() : null;
+    const savedSet = await getSavedSetForUser(req.user._id);
     const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
     const postPreview = {
       _id: post._id,
@@ -500,6 +520,7 @@ export const listPostComments = async (req, res) => {
       createdAt: post.createdAt,
       hideLikeCount: !!post.hideLikeCount,
       commentsDisabled: !!post.commentsDisabled,
+      savedByMe: savedSet.has(String(post._id)),
     };
     res.json({ comments: serialized, nextCursor, post: postPreview, anchorCommentId });
   } catch (e) {
@@ -675,6 +696,80 @@ export const deleteComment = async (req, res) => {
       { $inc: { commentCount: -(1 + (replyResult.deletedCount || 0)) } }
     ).catch(() => {});
     res.json({ ok: true, removedReplies: replyResult.deletedCount || 0 });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const savePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const post = await Post.findById(postId).select("_id author visibility media isDelete isDeleted");
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+
+    const user = await User.findById(req.user._id).select("savedPosts");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const already = Array.isArray(user.savedPosts) && user.savedPosts.some((item) => String(item.post) === String(postId));
+    if (!already) {
+      user.savedPosts.unshift({ post: post._id, savedAt: new Date() });
+      await user.save();
+    }
+    res.json({ saved: true });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const unsavePost = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    await User.updateOne(
+      { _id: req.user._id },
+      { $pull: { savedPosts: { post: postId } } },
+    ).catch(() => {});
+    res.json({ saved: false });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listSavedPosts = async (req, res) => {
+  try {
+    const type = String(req.query.type || "all").toLowerCase();
+    const user = await User.findById(req.user._id).select("savedPosts");
+    const savedEntries = Array.isArray(user?.savedPosts) ? user.savedPosts : [];
+    if (!savedEntries.length) return res.json({ posts: [] });
+
+    const ids = savedEntries.map((item) => item.post).filter(Boolean);
+    const posts = await Post.find({
+      _id: { $in: ids },
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    })
+      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+
+    const byId = new Map(posts.map((p) => [String(p._id), p]));
+    const savedSet = new Set(ids.map((id) => String(id)));
+
+    const ordered = [];
+    const sortedEntries = savedEntries
+      .slice()
+      .sort((a, b) => new Date(b.savedAt || 0) - new Date(a.savedAt || 0));
+
+    for (const entry of sortedEntries) {
+      const post = byId.get(String(entry.post));
+      if (!post) continue;
+      if (type === "clips" && !isVideoPost(post)) continue;
+      // Ensure the viewer can still access the post (e.g., privacy changes).
+      // eslint-disable-next-line no-await-in-loop
+      const allowed = await canViewPost(req.user._id, post);
+      if (!allowed) continue;
+      const serialized = serializePost(post, req.user._id, savedSet);
+      ordered.push({ ...serialized, savedAt: entry.savedAt });
+    }
+
+    res.json({ posts: ordered });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
