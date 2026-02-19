@@ -135,6 +135,48 @@ function uploadBuffer(buffer, options) {
   });
 }
 
+async function ensureVideoThumbnail(post) {
+  if (!post || !Array.isArray(post.media)) return post;
+  const idx = post.media.findIndex((m) => m?.type === "video" && m?.url);
+  if (idx < 0) return post;
+  const video = post.media[idx];
+  if (video?.thumbnailUrl) return post;
+
+  let thumbnailUrl = null;
+
+  if (video?.publicId) {
+    ensureCloudinaryConfigured();
+    thumbnailUrl = cloudinary.v2.url(video.publicId, {
+      resource_type: "video",
+      format: "jpg",
+      transformation: [{ width: 640, crop: "scale" }],
+    });
+  } else if (video?.url && String(video.url).startsWith("/uploads/")) {
+    try {
+      const ownerId = post.author?._id || post.author;
+      const inputPath = path.join(process.cwd(), video.url);
+      const thumbDir = path.join(process.cwd(), "uploads", "thumbs", String(ownerId));
+      await fs.mkdir(thumbDir, { recursive: true });
+      const thumbName = `${path.parse(video.url).name}.jpg`;
+      const thumbPath = path.join(thumbDir, thumbName);
+      await generateVideoThumbnail(inputPath, thumbPath);
+      thumbnailUrl = `/uploads/thumbs/${String(ownerId)}/${thumbName}`;
+    } catch {
+      thumbnailUrl = null;
+    }
+  }
+
+  if (thumbnailUrl) {
+    post.media[idx] = { ...video, thumbnailUrl };
+    await Post.updateOne(
+      { _id: post._id, "media.url": video.url },
+      { $set: { "media.$.thumbnailUrl": thumbnailUrl } },
+    ).catch(() => {});
+  }
+
+  return post;
+}
+
 async function canViewPost(viewerId, post) {
   if (!post) return false;
   const authorId = post.author && post.author._id ? post.author._id : post.author;
@@ -748,6 +790,11 @@ export const listSavedPosts = async (req, res) => {
       isDeleted: { $ne: true },
     })
       .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+
+    for (const post of posts) {
+      // eslint-disable-next-line no-await-in-loop
+      await ensureVideoThumbnail(post);
+    }
 
     const byId = new Map(posts.map((p) => [String(p._id), p]));
     const savedSet = new Set(ids.map((id) => String(id)));
