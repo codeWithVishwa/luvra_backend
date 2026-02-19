@@ -387,11 +387,42 @@ export const searchClips = async (req, res) => {
     const q = String(req.query.q || "").trim();
     if (!q) return res.json({ posts: [] });
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 40);
-    const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const tokens = q
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 3);
+
+    const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const buildFuzzyPatterns = (token) => {
+      const patterns = new Set();
+      if (!token) return patterns;
+      patterns.add(escapeRegex(token));
+      if (token.length > 2) {
+        for (let i = 0; i < token.length; i += 1) {
+          const deleted = token.slice(0, i) + token.slice(i + 1);
+          if (deleted.length > 1) patterns.add(escapeRegex(deleted));
+          const wildcard = token.slice(0, i) + "." + token.slice(i + 1);
+          patterns.add(escapeRegex(wildcard).replace("\\.", "."));
+        }
+      }
+      return patterns;
+    };
+
+    const patterns = new Set();
+    tokens.forEach((t) => {
+      buildFuzzyPatterns(t).forEach((p) => patterns.add(p));
+    });
+    const regexList = Array.from(patterns).slice(0, 30).map((p) => new RegExp(p, "i"));
     const savedSet = await getSavedSetForUser(req.user._id);
 
+    const captionQuery = regexList.length
+      ? { $or: regexList.map((r) => ({ caption: r })) }
+      : { caption: new RegExp(escapeRegex(q), "i") };
+
     const posts = await Post.find({
-      caption: regex,
+      ...captionQuery,
       visibility: "public",
       isDelete: { $ne: true },
       isDeleted: { $ne: true },
