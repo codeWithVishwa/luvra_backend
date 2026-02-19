@@ -641,6 +641,9 @@ export const updateProfile = async (req, res) => {
       if (!nextAllowLocation) {
         user.location = undefined;
         user.locationUpdatedAt = null;
+      } else if (user.location && !Array.isArray(user.location.coordinates)) {
+        user.location = undefined;
+        user.locationUpdatedAt = null;
       }
     }
     await user.save();

@@ -19,6 +19,7 @@ import errorHandler from "./middleware/errorHandler.js";
 import postRoutes from "./routes/posts.routes.js";
 import dayRoutes from "./routes/days.routes.js";
 import reportRoutes from "./routes/reports.routes.js";
+import User from "./models/user.model.js";
 // If you kept express-mongo-sanitize and are on an Express-5-safe version, you can import and use it here.
 // import mongoSanitize from "express-mongo-sanitize";
 
@@ -139,6 +140,23 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 async function start() {
   await connectDB();
+  try {
+    const cleanup = await User.updateMany(
+      {
+        location: { $exists: true },
+        $or: [
+          { "location.coordinates": { $exists: false } },
+          { "location.coordinates.1": { $exists: false } },
+        ],
+      },
+      { $unset: { location: "", locationUpdatedAt: "" } }
+    );
+    if ((cleanup?.modifiedCount || 0) > 0) {
+      console.log(`[startup] cleared invalid locations: ${cleanup.modifiedCount}`);
+    }
+  } catch (e) {
+    console.warn("[startup] location cleanup failed:", e?.message || e);
+  }
   const server = http.createServer(app);
   initSocket(server);
   server.listen(PORT, () => {

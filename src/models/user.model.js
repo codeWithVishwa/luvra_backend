@@ -102,4 +102,17 @@ userSchema.pre('save', function(next) {
   next();
 });
 
+userSchema.pre('save', function(next) {
+  if (this.location && Array.isArray(this.location.coordinates)) {
+    if (this.location.coordinates.length !== 2) {
+      this.location = undefined;
+      this.locationUpdatedAt = null;
+    }
+  } else if (this.location) {
+    this.location = undefined;
+    this.locationUpdatedAt = null;
+  }
+  next();
+});
+
 export default mongoose.model("User", userSchema);
