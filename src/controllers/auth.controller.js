@@ -84,6 +84,7 @@ function safeUserShape(user) {
     nickname: user.nickname,
     avatarUrl: user.avatarUrl || null,
     isPrivate: !!user.isPrivate,
+    allowLocationDiscovery: user.allowLocationDiscovery !== false,
   };
 }
 

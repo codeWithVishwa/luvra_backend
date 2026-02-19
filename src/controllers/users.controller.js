@@ -543,7 +543,7 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following allowGroupAdds");
+    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following allowGroupAdds allowLocationDiscovery");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const [postCount, followerCount, followingCount] = await Promise.all([
@@ -572,6 +572,7 @@ export const getProfile = async (req, res) => {
       followingCount,
       isPrivate: !!user.isPrivate,
       allowGroupAdds: user.allowGroupAdds !== false,
+      allowLocationDiscovery: user.allowLocationDiscovery !== false,
       postCount,
     } });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -582,8 +583,10 @@ export const updateProfile = async (req, res) => {
     const { name, nickname, interests, bio } = req.body;
     const isPrivateProvided = Object.prototype.hasOwnProperty.call(req.body, 'isPrivate');
     const allowGroupAddsProvided = Object.prototype.hasOwnProperty.call(req.body, 'allowGroupAdds');
+    const allowLocationProvided = Object.prototype.hasOwnProperty.call(req.body, 'allowLocationDiscovery');
     let nextPrivate;
     let nextAllowGroupAdds;
+    let nextAllowLocation;
     if (isPrivateProvided) {
       const value = req.body.isPrivate;
       if (typeof value === 'string') {
@@ -598,6 +601,14 @@ export const updateProfile = async (req, res) => {
         nextAllowGroupAdds = value === 'true' || value === '1';
       } else {
         nextAllowGroupAdds = !!value;
+      }
+    }
+    if (allowLocationProvided) {
+      const value = req.body.allowLocationDiscovery;
+      if (typeof value === 'string') {
+        nextAllowLocation = value === 'true' || value === '1';
+      } else {
+        nextAllowLocation = !!value;
       }
     }
     const user = await User.findById(req.user._id);
@@ -625,6 +636,13 @@ export const updateProfile = async (req, res) => {
     if (allowGroupAddsProvided && typeof nextAllowGroupAdds === 'boolean') {
       user.allowGroupAdds = nextAllowGroupAdds;
     }
+    if (allowLocationProvided && typeof nextAllowLocation === 'boolean') {
+      user.allowLocationDiscovery = nextAllowLocation;
+      if (!nextAllowLocation) {
+        user.location = undefined;
+        user.locationUpdatedAt = null;
+      }
+    }
     await user.save();
     if (visibilityChanged) {
       await Post.updateMany({ author: user._id }, { visibility: user.isPrivate ? 'private' : 'public' }).catch(() => {});
@@ -642,13 +660,122 @@ export const updateProfile = async (req, res) => {
         email: user.email,
         avatarUrl: user.avatarUrl,
         interests: user.interests,
-        bio: user.bio,
-        isPrivate: !!user.isPrivate,
-        allowGroupAdds: user.allowGroupAdds !== false,
-        postCount,
-      }
+      bio: user.bio,
+      isPrivate: !!user.isPrivate,
+      allowGroupAdds: user.allowGroupAdds !== false,
+      allowLocationDiscovery: user.allowLocationDiscovery !== false,
+      postCount,
+    }
     });
   } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+export const updateMyLocation = async (req, res) => {
+  try {
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: "lat and lng are required" });
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ message: "Invalid coordinates" });
+    }
+    const user = await User.findById(req.user._id).select("_id allowLocationDiscovery");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.allowLocationDiscovery === false) {
+      return res.status(403).json({ message: "Location discovery is disabled" });
+    }
+    user.location = { type: "Point", coordinates: [lng, lat] };
+    user.locationUpdatedAt = new Date();
+    await user.save();
+    res.json({ ok: true, updatedAt: user.locationUpdatedAt });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listNearbyUsers = async (req, res) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    const radiusKm = Math.min(Number(req.query.radiusKm) || 25, 100);
+    const limit = Math.min(Number(req.query.limit) || 30, 60);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: "lat and lng are required" });
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ message: "Invalid coordinates" });
+    }
+    const viewer = await User.findById(req.user._id).select("_id blockedUsers");
+    if (!viewer) return res.status(404).json({ message: "User not found" });
+    const viewerId = viewer._id;
+    const blockedIds = Array.isArray(viewer.blockedUsers) ? viewer.blockedUsers : [];
+    const docs = await User.aggregate([
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [lng, lat] },
+          distanceField: "distanceMeters",
+          maxDistance: radiusKm * 1000,
+          spherical: true,
+          query: {
+            _id: { $ne: viewerId, $nin: blockedIds },
+            verified: true,
+            status: "active",
+            allowLocationDiscovery: { $ne: false },
+            blockedUsers: { $nin: [viewerId] },
+          },
+        },
+      },
+      {
+        $project: {
+          name: 1,
+          nickname: 1,
+          avatarUrl: 1,
+          isPrivate: 1,
+          location: 1,
+          followers: { $ifNull: ["$followers", []] },
+          following: { $ifNull: ["$following", []] },
+          followRequests: { $ifNull: ["$followRequests", []] },
+          distanceMeters: 1,
+        },
+      },
+      {
+        $project: {
+          name: 1,
+          nickname: 1,
+          avatarUrl: 1,
+          isPrivate: 1,
+          distanceMeters: 1,
+          viewerIsFollower: { $in: [viewerId, "$followers"] },
+          viewerRequested: { $in: [viewerId, "$followRequests"] },
+          targetFollowsViewer: { $in: [viewerId, "$following"] },
+        },
+      },
+      { $limit: limit },
+    ]);
+
+    const users = docs.map((doc) => {
+      let followStatus = "not_following";
+      if (doc.viewerIsFollower) followStatus = "following";
+      else if (doc.viewerRequested) followStatus = "requested";
+      else if (doc.targetFollowsViewer) followStatus = "follow_back";
+      return {
+        _id: doc._id,
+        name: doc.name,
+        nickname: doc.nickname,
+        avatarUrl: doc.avatarUrl,
+        isPrivate: !!doc.isPrivate,
+        distanceKm: Number((doc.distanceMeters / 1000).toFixed(2)),
+        location: Array.isArray(doc?.location?.coordinates) && doc.location.coordinates.length === 2
+          ? { lng: doc.location.coordinates[0], lat: doc.location.coordinates[1] }
+          : null,
+        followStatus,
+      };
+    });
+    res.json({ users });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 };
 
 export const uploadAvatar = async (req, res) => {

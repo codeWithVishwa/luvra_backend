@@ -11,6 +11,7 @@ import {
   listFeedPosts,
   listUserPosts,
   listTrendingPosts,
+  searchClips,
   unlikePost,
   uploadPostMedia,
   updatePostSettings,
@@ -22,6 +23,7 @@ router.post("/media", auth, uploadMedia.single("media"), uploadPostMedia);
 router.post("/", auth, createPost);
 router.get("/feed", auth, listFeedPosts);
 router.get("/trending", auth, listTrendingPosts);
+router.get("/search-clips", auth, searchClips);
 router.get("/user/:userId", auth, listUserPosts);
 router.post("/:postId/like", auth, likePost);
 router.delete("/:postId/like", auth, unlikePost);

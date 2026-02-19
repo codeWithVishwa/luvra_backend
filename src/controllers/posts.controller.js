@@ -1,10 +1,15 @@
 import cloudinary from "cloudinary";
+import fs from "fs/promises";
+import path from "path";
+import crypto from "crypto";
 import Post from "../models/post.model.js";
 import User from "../models/user.model.js";
 import Comment from "../models/comment.model.js";
 import Notification from "../models/notification.model.js";
 import { sendPushNotification } from "../utils/expoPush.js";
 import { getOnlineUsers, getSocketIdsForUser } from "../socket.js";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegPath from "ffmpeg-static";
 
 function ensureCloudinaryConfigured() {
   const cfg = cloudinary.v2.config();
@@ -18,6 +23,28 @@ function ensureCloudinaryConfigured() {
   }
 }
 
+function ensureFfmpegConfigured() {
+  if (ffmpegPath) {
+    ffmpeg.setFfmpegPath(ffmpegPath);
+  }
+}
+
+function generateVideoThumbnail(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ensureFfmpegConfigured();
+    const folder = path.dirname(outputPath);
+    const filename = path.basename(outputPath);
+    ffmpeg(inputPath)
+      .on("end", () => resolve(outputPath))
+      .on("error", reject)
+      .screenshots({
+        timestamps: ["00:00:00.200"],
+        filename,
+        folder,
+        size: "640x?",
+      });
+  });
+}
 const MAX_VIDEO_SECONDS = 20;
 const MAX_MEDIA_PER_POST = 4;
 
@@ -105,29 +132,71 @@ async function canViewPost(viewerId, post) {
 
 export const uploadPostMedia = async (req, res) => {
   try {
-    ensureCloudinaryConfigured();
     if (!req.file) return res.status(400).json({ message: "No file provided" });
     const isVideo = req.file.mimetype.startsWith("video/");
-    const resourceType = isVideo ? "video" : "image";
-    const folder = `flowsnap/posts/${req.user._id}`;
-    const result = await uploadBuffer(req.file.buffer, {
-      folder,
-      resource_type: resourceType,
-      overwrite: false,
-    });
-    if (isVideo && result.duration && result.duration > MAX_VIDEO_SECONDS) {
-      await cloudinary.v2.uploader.destroy(result.public_id, { resource_type: "video" }).catch(() => {});
-      return res.status(400).json({ message: `Videos must be under ${MAX_VIDEO_SECONDS} seconds.` });
+    const nodeEnv = String(process.env.NODE_ENV || "").toLowerCase();
+    const useCloudinary = nodeEnv === "developement" || nodeEnv === "development";
+
+    if (useCloudinary) {
+      ensureCloudinaryConfigured();
+      const resourceType = isVideo ? "video" : "image";
+      const folder = `flowsnap/posts/${req.user._id}`;
+      const result = await uploadBuffer(req.file.buffer, {
+        folder,
+        resource_type: resourceType,
+        overwrite: false,
+      });
+      if (isVideo && result.duration && result.duration > MAX_VIDEO_SECONDS) {
+        await cloudinary.v2.uploader.destroy(result.public_id, { resource_type: "video" }).catch(() => {});
+        return res.status(400).json({ message: `Videos must be under ${MAX_VIDEO_SECONDS} seconds.` });
+      }
+      const thumbnailUrl = isVideo
+        ? cloudinary.v2.url(result.public_id, {
+            resource_type: "video",
+            format: "jpg",
+            transformation: [{ width: 640, crop: "scale" }],
+          })
+        : undefined;
+      const media = {
+        url: result.secure_url,
+        type: isVideo ? "video" : "image",
+        publicId: result.public_id,
+        thumbnailUrl,
+        width: result.width,
+        height: result.height,
+        durationSeconds: result.duration ? Math.round(result.duration) : undefined,
+      };
+      return res.status(201).json({ media });
     }
+
+    const uploadsRoot = path.join(process.cwd(), "uploads");
+    const postsDir = path.join(uploadsRoot, "posts", String(req.user._id));
+    await fs.mkdir(postsDir, { recursive: true });
+
+    const originalExt = path.extname(req.file.originalname || "").toLowerCase();
+    const safeExt = originalExt || (isVideo ? ".mp4" : ".jpg");
+    const filename = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}${safeExt}`;
+    const filepath = path.join(postsDir, filename);
+    await fs.writeFile(filepath, req.file.buffer);
+
+    let thumbnailUrl = undefined;
+    if (isVideo) {
+      const thumbsDir = path.join(uploadsRoot, "thumbs", String(req.user._id));
+      await fs.mkdir(thumbsDir, { recursive: true });
+      const thumbName = `${path.parse(filename).name}.jpg`;
+      const thumbPath = path.join(thumbsDir, thumbName);
+      try {
+        await generateVideoThumbnail(filepath, thumbPath);
+        thumbnailUrl = `/uploads/thumbs/${String(req.user._id)}/${thumbName}`;
+      } catch {}
+    }
+
     const media = {
-      url: result.secure_url,
+      url: `/uploads/posts/${String(req.user._id)}/${filename}`,
       type: isVideo ? "video" : "image",
-      publicId: result.public_id,
-      width: result.width,
-      height: result.height,
-      durationSeconds: result.duration ? Math.round(result.duration) : undefined,
+      thumbnailUrl,
     };
-    res.status(201).json({ media });
+    return res.status(201).json({ media });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -146,6 +215,7 @@ export const createPost = async (req, res) => {
         url: item?.url,
         type: item?.type === "video" ? "video" : "image",
         publicId: item?.publicId,
+        thumbnailUrl: item?.thumbnailUrl,
         width: item?.width,
         height: item?.height,
         durationSeconds: item?.durationSeconds,
@@ -230,20 +300,49 @@ export const listTrendingPosts = async (req, res) => {
         const comments = typeof post.commentCount === "number" ? post.commentCount : 0;
         const shares = 0;
         const score = likes * 2 + comments * 3 + shares * 4;
-        const thumbnail = post.media?.[0]?.url || null;
+        const media = Array.isArray(post.media) ? post.media : [];
+        const videoMedia = media.find((m) => m?.type === "video" && m?.url);
+        if (!videoMedia) return null;
+        const thumbnail = videoMedia?.thumbnailUrl || videoMedia?.url || media?.[0]?.url || null;
         return {
           post_id: post._id,
           thumbnail,
           authorAvatar: post.author?.avatarUrl || null,
           created_at: post.createdAt,
+          clip: serializePost(post, req.user._id),
           score,
         };
       })
-      .filter((item) => !!item.thumbnail)
+      .filter((item) => !!item?.thumbnail)
       .sort((a, b) => (b.score || 0) - (a.score || 0))
       .slice(0, limit);
 
     res.json({ posts: scored });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const searchClips = async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ posts: [] });
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 40);
+    const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+    const posts = await Post.find({
+      caption: regex,
+      visibility: "public",
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+      media: { $elemMatch: { type: "video", url: { $exists: true, $ne: "" } } },
+    })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+
+    const serialized = posts.map((p) => serializePost(p, req.user._id));
+    res.json({ posts: serialized });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -333,6 +432,7 @@ export const deletePost = async (req, res) => {
 export const listPostComments = async (req, res) => {
   try {
     const { postId } = req.params;
+    const commentId = typeof req.query.commentId === "string" ? req.query.commentId.trim() : "";
     const post = await Post.findById(postId)
       .select("author visibility media caption createdAt hideLikeCount commentsDisabled")
       .populate("author", "_id name avatarUrl");
@@ -361,10 +461,31 @@ export const listPostComments = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate("author", "_id name avatarUrl isVerified verificationType")
-      .populate({ path: "parent", select: "_id author", populate: { path: "author", select: "_id name avatarUrl isVerified verificationType" } })
+      .populate({ path: "parent", select: "_id text createdAt author", populate: { path: "author", select: "_id name avatarUrl isVerified verificationType" } })
       .exec();
 
     const serialized = comments.map(serializeComment);
+    let anchorCommentId = null;
+
+    if (commentId) {
+      const anchorComment = await Comment.findOne({ _id: commentId, post: postId })
+        .populate("author", "_id name avatarUrl isVerified verificationType")
+        .populate({ path: "parent", select: "_id text createdAt author", populate: { path: "author", select: "_id name avatarUrl isVerified verificationType" } })
+        .exec();
+      if (anchorComment) {
+        anchorCommentId = String(anchorComment._id);
+        const existing = new Set(serialized.map((c) => String(c._id)));
+        const parent = anchorComment.parent ? serializeComment(anchorComment.parent) : null;
+        if (parent && !existing.has(String(parent._id))) {
+          serialized.unshift(parent);
+          existing.add(String(parent._id));
+        }
+        const anchorSerialized = serializeComment(anchorComment);
+        if (!existing.has(String(anchorSerialized._id))) {
+          serialized.unshift(anchorSerialized);
+        }
+      }
+    }
     const nextCursor = comments.length === limit ? comments[comments.length - 1].createdAt.toISOString() : null;
     const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
     const postPreview = {
@@ -380,7 +501,7 @@ export const listPostComments = async (req, res) => {
       hideLikeCount: !!post.hideLikeCount,
       commentsDisabled: !!post.commentsDisabled,
     };
-    res.json({ comments: serialized, nextCursor, post: postPreview });
+    res.json({ comments: serialized, nextCursor, post: postPreview, anchorCommentId });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

@@ -18,6 +18,12 @@ const userSchema = new mongoose.Schema(
     },
   ],
   allowGroupAdds: { type: Boolean, default: true },
+  allowLocationDiscovery: { type: Boolean, default: false },
+  location: {
+    type: { type: String, enum: ["Point"], default: "Point" },
+    coordinates: { type: [Number], default: undefined },
+  },
+  locationUpdatedAt: { type: Date, default: null },
   encryptionPublicKey: { type: String, default: null },
   nickname: { type: String, trim: true, maxlength: 40, default: null },
   bio: { type: String, trim: true, maxlength: 300 },
@@ -87,6 +93,7 @@ userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
 userSchema.index({ followRequests: 1 });
 userSchema.index({ 'messageRequests.from': 1 });
+userSchema.index({ location: "2dsphere" });
 
 userSchema.pre('save', function(next) {
   if (this.isModified('name') && typeof this.name === 'string') {
