@@ -1,5 +1,6 @@
 import { Server } from "socket.io";
 import User from "./models/user.model.js";
+import Conversation from "./models/conversation.model.js";
 import { sendPushNotification } from "./utils/expoPush.js";
 import { deliverPendingNotificationsOnReconnect } from "./utils/messageNotifications.js";
 
@@ -49,6 +50,7 @@ export function initSocket(server) {
 
   io.on("connection", async (socket) => {
     const userId = socket.handshake.auth?.userId || socket.handshake.query?.userId;
+    const socketUserId = userId ? String(userId) : null;
     if (userId) {
       // 1) Track socket mapping for real-time notifications
       const uid = String(userId);
@@ -92,6 +94,52 @@ export function initSocket(server) {
         console.error("Error processing offline notifications", e);
       }
     }
+
+    socket.on("typing:start", async (payload = {}) => {
+      try {
+        if (!socketUserId) return;
+        const conversationId = payload?.conversationId;
+        if (!conversationId) return;
+        const now = Date.now();
+        const lastStartAt = socket.data?.typingStartAt || 0;
+        if (now - lastStartAt < 700) return;
+        socket.data.typingStartAt = now;
+
+        const convo = await Conversation.findById(conversationId).select("participants");
+        if (!convo?.participants?.length) return;
+        const isParticipant = convo.participants.some((id) => String(id) === socketUserId);
+        if (!isParticipant) return;
+        convo.participants
+          .map((id) => String(id))
+          .filter((id) => id !== socketUserId)
+          .forEach((id) => {
+            io.to(`user:${id}`).emit("typing:start", { conversationId, userId: socketUserId });
+          });
+      } catch {}
+    });
+
+    socket.on("typing:stop", async (payload = {}) => {
+      try {
+        if (!socketUserId) return;
+        const conversationId = payload?.conversationId;
+        if (!conversationId) return;
+        const now = Date.now();
+        const lastStopAt = socket.data?.typingStopAt || 0;
+        if (now - lastStopAt < 300) return;
+        socket.data.typingStopAt = now;
+
+        const convo = await Conversation.findById(conversationId).select("participants");
+        if (!convo?.participants?.length) return;
+        const isParticipant = convo.participants.some((id) => String(id) === socketUserId);
+        if (!isParticipant) return;
+        convo.participants
+          .map((id) => String(id))
+          .filter((id) => id !== socketUserId)
+          .forEach((id) => {
+            io.to(`user:${id}`).emit("typing:stop", { conversationId, userId: socketUserId });
+          });
+      } catch {}
+    });
 
     socket.on("call:invite", (payload) => {
       const callId = payload?.callId;
