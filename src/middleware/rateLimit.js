@@ -30,3 +30,25 @@ export const authLimiter = rateLimitDisabled
       legacyHeaders: false,
       keyGenerator: (req) => req.ip,
     });
+
+export const uploadSignatureLimiter = rateLimitDisabled
+  ? noopLimiter
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 30,
+      message: { message: "Too many upload signature requests. Please try again in a minute." },
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => req.ip,
+    });
+
+export const createPostLimiter = rateLimitDisabled
+  ? noopLimiter
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 20,
+      message: { message: "Too many post attempts. Please wait a moment." },
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: (req) => req.user?._id ? String(req.user._id) : req.ip,
+    });

@@ -1,6 +1,7 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import { uploadMedia } from "../middleware/upload.js";
+import { uploadSignatureLimiter, createPostLimiter } from "../middleware/rateLimit.js";
 import {
   createPost,
   addComment,
@@ -13,7 +14,9 @@ import {
   listTrendingPosts,
   searchClips,
   unlikePost,
+  trackPostView,
   uploadPostMedia,
+  generateVideoUploadSignature,
   updatePostSettings,
   savePost,
   unsavePost,
@@ -22,8 +25,9 @@ import {
 
 const router = express.Router();
 
+router.post("/video/signature", auth, uploadSignatureLimiter, generateVideoUploadSignature);
 router.post("/media", auth, uploadMedia.single("media"), uploadPostMedia);
-router.post("/", auth, createPost);
+router.post("/", auth, createPostLimiter, createPost);
 router.get("/feed", auth, listFeedPosts);
 router.get("/trending", auth, listTrendingPosts);
 router.get("/search-clips", auth, searchClips);
@@ -31,6 +35,7 @@ router.get("/saved", auth, listSavedPosts);
 router.get("/user/:userId", auth, listUserPosts);
 router.post("/:postId/like", auth, likePost);
 router.delete("/:postId/like", auth, unlikePost);
+router.post("/:postId/view", auth, trackPostView);
 router.post("/:postId/save", auth, savePost);
 router.delete("/:postId/save", auth, unsavePost);
 router.get("/:postId/comments", auth, listPostComments);

@@ -216,10 +216,6 @@ export const onboardingStart = async (req, res) => {
     if (existingUser?.verified) {
       return res.status(409).json({ message: "Email already registered. Please log in." });
     }
-    if (existingUser && !existingUser.verified) {
-      return res.status(409).json({ message: "Email already exists in pending registration. Please use the existing verification flow." });
-    }
-
     const otp = makeOtpCode();
     const otpHash = makeOtpHash(otp);
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
@@ -230,6 +226,7 @@ export const onboardingStart = async (req, res) => {
       {
         $set: {
           email,
+          pendingUserId: existingUser && !existingUser.verified ? existingUser._id : null,
           emailOtpHash: otpHash,
           emailOtpExpires: otpExpires,
           emailVerified: false,
@@ -338,24 +335,52 @@ export const onboardingComplete = async (req, res) => {
     if (!draft) return res.status(404).json({ message: "Onboarding session not found. Start again." });
     if (!draft.emailVerified) return res.status(400).json({ message: "Please verify your email first" });
 
-    const existingUser = await User.findOne({ email }).select("_id");
-    if (existingUser) return res.status(409).json({ message: "Email already registered. Please log in." });
+    let user = null;
+    let pendingUser = null;
+    if (draft.pendingUserId) {
+      pendingUser = await User.findOne({ _id: draft.pendingUserId, email }).select("_id email verified");
+    } else {
+      pendingUser = await User.findOne({ email }).select("_id email verified");
+    }
 
-    const existingName = await User.findOne({ nameLower: cleanName.toLowerCase() }).select("_id");
+    if (pendingUser && pendingUser.verified) {
+      return res.status(409).json({ message: "Email already registered. Please log in." });
+    }
+
+    const existingName = await User.findOne({
+      nameLower: cleanName.toLowerCase(),
+      ...(pendingUser?._id ? { _id: { $ne: pendingUser._id } } : {}),
+    }).select("_id");
     if (existingName) {
       const suggestions = await suggestUsernames(cleanName);
       return res.status(409).json({ message: "Username already taken", suggestions });
     }
 
     const hashed = await bcrypt.hash(password, 10);
-    const user = await User.create({
-      name: cleanName,
-      email,
-      password: hashed,
-      verified: true,
-      phone: phone || null,
-      interests,
-    });
+
+    if (pendingUser?._id) {
+      user = await User.findById(pendingUser._id);
+      if (!user) return res.status(404).json({ message: "Pending account not found. Please start again." });
+      user.name = cleanName;
+      user.password = hashed;
+      user.verified = true;
+      user.phone = phone || null;
+      user.interests = interests;
+      user.emailVerificationOTP = null;
+      user.emailVerificationOTPExpires = null;
+      user.emailVerificationToken = null;
+      user.emailVerificationExpires = null;
+      await user.save();
+    } else {
+      user = await User.create({
+        name: cleanName,
+        email,
+        password: hashed,
+        verified: true,
+        phone: phone || null,
+        interests,
+      });
+    }
 
     await OnboardingDraft.deleteOne({ _id: draft._id }).catch(() => {});
 

@@ -3,8 +3,12 @@ import mongoose from "mongoose";
 const mediaSchema = new mongoose.Schema(
   {
     url: { type: String, required: true },
+    secureUrl: { type: String },
     type: { type: String, enum: ["image", "video"], required: true },
     publicId: { type: String },
+    assetId: { type: String },
+    format: { type: String },
+    bytes: { type: Number },
     thumbnailUrl: { type: String },
     width: { type: Number },
     height: { type: Number },
@@ -21,6 +25,8 @@ const postSchema = new mongoose.Schema(
     media: { type: [mediaSchema], default: [] },
     visibility: { type: String, enum: ["public", "private"], default: "public" },
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    viewCount: { type: Number, default: 0 },
+    playCount: { type: Number, default: 0 },
     commentCount: { type: Number, default: 0 },
     hideLikeCount: { type: Boolean, default: false },
     commentsDisabled: { type: Boolean, default: false },

@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import Post from "../models/post.model.js";
+import PostView from "../models/postView.model.js";
 import User from "../models/user.model.js";
 import Comment from "../models/comment.model.js";
 import Notification from "../models/notification.model.js";
@@ -46,7 +47,98 @@ function generateVideoThumbnail(inputPath, outputPath) {
   });
 }
 const MAX_VIDEO_SECONDS = 20;
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+const ALLOWED_VIDEO_FORMAT = "mp4";
 const MAX_MEDIA_PER_POST = 4;
+const VIDEO_UPLOAD_TRANSFORMATION = "q_auto:good,vc_auto";
+const VIEW_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+
+function safeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function parseCloudinaryPublicIdFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!/cloudinary\.com$/i.test(parsed.hostname)) return null;
+    const parts = parsed.pathname.split("/upload/");
+    if (parts.length < 2) return null;
+    const tail = parts[1].split(/[?#]/)[0];
+    const withoutVersion = tail.replace(/^v\d+\//, "");
+    return withoutVersion.replace(/\.[a-z0-9]+$/i, "");
+  } catch {
+    return null;
+  }
+}
+
+async function validateCloudinaryVideoMediaItem(item) {
+  ensureCloudinaryConfigured();
+
+  const providedUrl = safeString(item?.url);
+  if (!providedUrl || !providedUrl.startsWith("https://")) {
+    throw new Error("Video URL must be a valid secure URL.");
+  }
+
+  const providedPublicId = safeString(item?.publicId);
+  const derivedPublicId = parseCloudinaryPublicIdFromUrl(providedUrl);
+  const publicId = providedPublicId || derivedPublicId;
+  if (!publicId) {
+    throw new Error("Video publicId is required.");
+  }
+
+  const resource = await cloudinary.v2.api.resource(publicId, {
+    resource_type: "video",
+  });
+
+  if (!resource?.secure_url) {
+    throw new Error("Video asset not found in Cloudinary.");
+  }
+
+  const durationSeconds = Number(resource.duration) || 0;
+  const bytes = Number(resource.bytes) || 0;
+  const format = safeString(resource.format).toLowerCase();
+
+  if (durationSeconds > MAX_VIDEO_SECONDS) {
+    throw new Error(`Videos must be ${MAX_VIDEO_SECONDS} seconds or shorter.`);
+  }
+  if (bytes > MAX_VIDEO_BYTES) {
+    throw new Error("Video size exceeds 20MB.");
+  }
+  if (format !== ALLOWED_VIDEO_FORMAT) {
+    throw new Error("Only mp4 video format is allowed.");
+  }
+
+  const optimizedUrl = cloudinary.v2.url(publicId, {
+    resource_type: "video",
+    secure: true,
+    transformation: [
+      {
+        fetch_format: "auto",
+        quality: "auto",
+        video_codec: "auto",
+      },
+    ],
+  });
+  const thumbnailUrl = cloudinary.v2.url(publicId, {
+    resource_type: "video",
+    format: "jpg",
+    transformation: [{ start_offset: "0", width: 640, crop: "scale" }],
+  });
+
+  return {
+    url: optimizedUrl || resource.secure_url,
+    secureUrl: resource.secure_url,
+    type: "video",
+    publicId: resource.public_id,
+    assetId: resource.asset_id,
+    thumbnailUrl,
+    width: resource.width,
+    height: resource.height,
+    durationSeconds: Math.round(durationSeconds),
+    format,
+    bytes,
+  };
+}
 
 async function getFollowingIds(userId) {
   const user = await User.findById(userId).select("following");
@@ -82,6 +174,8 @@ function serializePost(post, viewerId, savedSet) {
         }
       : null,
     likeCount: likes.length,
+    viewCount: Number(post.viewCount || 0),
+    playCount: Number(post.playCount || 0),
     likedByMe: viewerId ? likes.includes(String(viewerId)) : false,
     savedByMe: savedSet ? savedSet.has(String(post._id)) : false,
   };
@@ -191,6 +285,11 @@ export const uploadPostMedia = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file provided" });
     const isVideo = req.file.mimetype.startsWith("video/");
+    if (isVideo) {
+      return res.status(400).json({
+        message: "Direct video upload via backend is disabled. Use signed Cloudinary upload.",
+      });
+    }
     const nodeEnv = String(process.env.NODE_ENV || "").toLowerCase();
     const useCloudinary = nodeEnv === "developement" || nodeEnv === "development";
 
@@ -259,6 +358,47 @@ export const uploadPostMedia = async (req, res) => {
   }
 };
 
+export const generateVideoUploadSignature = async (req, res) => {
+  try {
+    ensureCloudinaryConfigured();
+    const cfg = cloudinary.v2.config();
+    if (!cfg.api_key || !cfg.api_secret || !cfg.cloud_name) {
+      return res.status(500).json({ message: "Cloudinary is not configured." });
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const folder = `flowsnap/posts/${String(req.user._id)}`;
+    const eager = "f_auto,q_auto,vc_auto";
+    const paramsToSign = {
+      timestamp,
+      folder,
+      resource_type: "video",
+      allowed_formats: ALLOWED_VIDEO_FORMAT,
+      max_file_size: MAX_VIDEO_BYTES,
+      transformation: VIDEO_UPLOAD_TRANSFORMATION,
+      eager,
+      eager_async: "false",
+    };
+    const signature = cloudinary.v2.utils.api_sign_request(paramsToSign, cfg.api_secret);
+
+    return res.json({
+      cloudName: cfg.cloud_name,
+      apiKey: cfg.api_key,
+      timestamp,
+      signature,
+      folder,
+      resourceType: "video",
+      allowedFormats: ALLOWED_VIDEO_FORMAT,
+      maxFileSize: MAX_VIDEO_BYTES,
+      transformation: VIDEO_UPLOAD_TRANSFORMATION,
+      eager,
+      eagerAsync: "false",
+    });
+  } catch (e) {
+    return res.status(500).json({ message: e.message || "Unable to create upload signature." });
+  }
+};
+
 export const createPost = async (req, res) => {
   try {
     const author = await User.findById(req.user._id).select("_id isPrivate name avatarUrl");
@@ -266,12 +406,16 @@ export const createPost = async (req, res) => {
 
     const caption = typeof req.body.caption === "string" ? req.body.caption.trim().slice(0, 500) : "";
     const incomingMedia = Array.isArray(req.body.media) ? req.body.media : [];
-    const media = incomingMedia
+    const mediaInput = incomingMedia
       .slice(0, MAX_MEDIA_PER_POST)
       .map((item) => ({
         url: item?.url,
+        secureUrl: item?.secureUrl,
         type: item?.type === "video" ? "video" : "image",
         publicId: item?.publicId,
+        assetId: item?.assetId,
+        format: item?.format,
+        bytes: item?.bytes,
         thumbnailUrl: item?.thumbnailUrl,
         width: item?.width,
         height: item?.height,
@@ -279,15 +423,34 @@ export const createPost = async (req, res) => {
       }))
       .filter((item) => item.url);
 
-    if (!caption && media.length === 0) {
+    if (!caption && mediaInput.length === 0) {
       return res.status(400).json({ message: "Post must include text or media" });
     }
 
-    const videoCount = media.filter((m) => m.type === "video").length;
+    const videoCount = mediaInput.filter((m) => m.type === "video").length;
     if (videoCount > 1) return res.status(400).json({ message: "Only one video allowed per post" });
-    const video = media.find((m) => m.type === "video");
-    if (video && video.durationSeconds && video.durationSeconds > MAX_VIDEO_SECONDS) {
-      return res.status(400).json({ message: `Videos must be under ${MAX_VIDEO_SECONDS} seconds.` });
+
+    const media = [];
+    for (const item of mediaInput) {
+      if (item.type === "video") {
+        let validatedVideo = null;
+        try {
+          validatedVideo = await validateCloudinaryVideoMediaItem(item);
+        } catch (videoError) {
+          return res.status(400).json({ message: videoError?.message || "Invalid video upload." });
+        }
+        media.push(validatedVideo);
+      } else {
+        media.push({
+          url: item.url,
+          secureUrl: safeString(item.secureUrl) || undefined,
+          type: "image",
+          publicId: safeString(item.publicId) || undefined,
+          thumbnailUrl: safeString(item.thumbnailUrl) || undefined,
+          width: Number.isFinite(item.width) ? item.width : undefined,
+          height: Number.isFinite(item.height) ? item.height : undefined,
+        });
+      }
     }
 
     const post = await Post.create({
@@ -343,38 +506,83 @@ export const listTrendingPosts = async (req, res) => {
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
     const savedSet = await getSavedSetForUser(req.user._id);
 
-    const candidates = await Post.find({
-      createdAt: { $gte: since },
+    const buildTrending = (posts) =>
+      posts
+        .map((post) => {
+          const media = Array.isArray(post.media) ? post.media : [];
+          const videoMedia = media.find((m) => m?.type === "video" && m?.url);
+          if (!videoMedia) return null;
+
+          const likes = Array.isArray(post.likes) ? post.likes.length : 0;
+          const comments = typeof post.commentCount === "number" ? post.commentCount : 0;
+          const views = Math.max(
+            Number(post?.viewCount || 0),
+            Number(post?.views || 0),
+            Number(post?.playCount || 0),
+            Number(videoMedia?.viewCount || 0),
+            Number(videoMedia?.views || 0),
+            Number(videoMedia?.playCount || 0),
+            0,
+          );
+
+          const ageHours = Math.max(1, (Date.now() - new Date(post.createdAt).getTime()) / (1000 * 60 * 60));
+          const freshness = Math.max(0, 24 - ageHours) * 0.4;
+          const score = likes * 5 + views * 2 + comments * 3 + freshness;
+
+          let thumbnail = videoMedia?.thumbnailUrl || videoMedia?.url || media?.[0]?.url || null;
+          if (!thumbnail && videoMedia?.publicId) {
+            thumbnail = cloudinary.v2.url(videoMedia.publicId, {
+              resource_type: "video",
+              format: "jpg",
+              transformation: [{ width: 640, crop: "scale", start_offset: "0" }],
+            });
+          }
+          if (!thumbnail) return null;
+
+          return {
+            post_id: post._id,
+            thumbnail,
+            authorAvatar: post.author?.avatarUrl || null,
+            created_at: post.createdAt,
+            views,
+            likes,
+            score,
+            clip: serializePost(post, req.user._id, savedSet),
+          };
+        })
+        .filter((item) => !!item?.thumbnail)
+        .sort((a, b) => {
+          if ((b.score || 0) !== (a.score || 0)) return (b.score || 0) - (a.score || 0);
+          if ((b.views || 0) !== (a.views || 0)) return (b.views || 0) - (a.views || 0);
+          if ((b.likes || 0) !== (a.likes || 0)) return (b.likes || 0) - (a.likes || 0);
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        })
+        .slice(0, limit);
+
+    const baseQuery = {
       visibility: "public",
       isDelete: { $ne: true },
       isDeleted: { $ne: true },
+      media: { $elemMatch: { type: "video", url: { $exists: true, $ne: "" } } },
+    };
+
+    const recentCandidates = await Post.find({
+      ...baseQuery,
+      createdAt: { $gte: since },
     })
       .sort({ createdAt: -1 })
-      .limit(200)
+      .limit(250)
       .populate("author", "_id name avatarUrl");
 
-    const scored = candidates
-      .map((post) => {
-        const likes = Array.isArray(post.likes) ? post.likes.length : 0;
-        const comments = typeof post.commentCount === "number" ? post.commentCount : 0;
-        const shares = 0;
-        const score = likes * 2 + comments * 3 + shares * 4;
-        const media = Array.isArray(post.media) ? post.media : [];
-        const videoMedia = media.find((m) => m?.type === "video" && m?.url);
-        if (!videoMedia) return null;
-        const thumbnail = videoMedia?.thumbnailUrl || videoMedia?.url || media?.[0]?.url || null;
-        return {
-          post_id: post._id,
-          thumbnail,
-          authorAvatar: post.author?.avatarUrl || null,
-          created_at: post.createdAt,
-          clip: serializePost(post, req.user._id, savedSet),
-          score,
-        };
-      })
-      .filter((item) => !!item?.thumbnail)
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .slice(0, limit);
+    let scored = buildTrending(recentCandidates);
+
+    if (scored.length < Math.min(limit, 6)) {
+      const fallbackCandidates = await Post.find(baseQuery)
+        .sort({ createdAt: -1 })
+        .limit(400)
+        .populate("author", "_id name avatarUrl");
+      scored = buildTrending(fallbackCandidates);
+    }
 
     res.json({ posts: scored });
   } catch (e) {
@@ -771,6 +979,55 @@ export const deleteComment = async (req, res) => {
     res.json({ ok: true, removedReplies: replyResult.deletedCount || 0 });
   } catch (e) {
     res.status(500).json({ message: e.message });
+  }
+};
+
+export const trackPostView = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const viewerId = req.user?._id;
+    if (!viewerId) return res.status(401).json({ message: "Unauthorized" });
+
+    const post = await Post.findById(postId).select("_id author visibility viewCount playCount isDelete isDeleted");
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(viewerId, post))) return res.status(403).json({ message: "Not allowed" });
+
+    const now = new Date();
+    const cooldownBoundary = new Date(now.getTime() - VIEW_COOLDOWN_MS);
+    const existing = await PostView.findOne({ post: post._id, viewer: viewerId }).select("_id lastViewedAt");
+
+    let incremented = false;
+    if (!existing) {
+      await PostView.create({ post: post._id, viewer: viewerId, lastViewedAt: now });
+      incremented = true;
+    } else if (!existing.lastViewedAt || existing.lastViewedAt <= cooldownBoundary) {
+      existing.lastViewedAt = now;
+      await existing.save();
+      incremented = true;
+    }
+
+    if (incremented) {
+      const updated = await Post.findByIdAndUpdate(
+        post._id,
+        { $inc: { viewCount: 1, playCount: 1 } },
+        { new: true, projection: { viewCount: 1, playCount: 1 } },
+      );
+      return res.json({
+        postId: String(post._id),
+        counted: true,
+        viewCount: Number(updated?.viewCount || 0),
+        playCount: Number(updated?.playCount || 0),
+      });
+    }
+
+    return res.json({
+      postId: String(post._id),
+      counted: false,
+      viewCount: Number(post.viewCount || 0),
+      playCount: Number(post.playCount || 0),
+    });
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
   }
 };
 

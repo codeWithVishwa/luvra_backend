@@ -1,7 +1,7 @@
 import User from "../models/user.model.js";
 import Notification from "../models/notification.model.js";
 import { sendPushNotification } from "../utils/expoPush.js";
-import { getOnlineUsers, getSocketIdsForUser } from "../socket.js";
+import { getIO, getOnlineUsers, getSocketIdsForUser } from "../socket.js";
 
 function toAbsoluteUrl(url) {
   if (!url || typeof url !== "string") return null;
@@ -88,6 +88,19 @@ export const followUser = async (req, res) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       ).catch(() => {});
 
+      // Realtime in-app notification refresh for recipient
+      try {
+        const io = getIO();
+        io.to(`user:${String(targetUserId)}`).emit("notify:update", {
+          type: "follow_request",
+          actorId: String(req.user._id),
+          actorName: req.user?.name || req.user?.nickname || "Someone",
+          actorAvatarUrl: toAbsoluteUrl(req.user?.avatarUrl) || null,
+          message: `${req.user.name || "Someone"} requested to follow you`,
+          createdAt: new Date().toISOString(),
+        });
+      } catch {}
+
       try {
         const recipientId = String(targetUserId);
         const onlineUsers = getOnlineUsers();
@@ -143,6 +156,19 @@ export const followUser = async (req, res) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     ).catch(() => {});
+
+    // Realtime in-app notification refresh for recipient
+    try {
+      const io = getIO();
+      io.to(`user:${String(targetUserId)}`).emit("notify:update", {
+        type: "follow",
+        actorId: String(req.user._id),
+        actorName: req.user?.name || req.user?.nickname || "Someone",
+        actorAvatarUrl: toAbsoluteUrl(req.user?.avatarUrl) || null,
+        message: `${req.user.name || "Someone"} started following you`,
+        createdAt: new Date().toISOString(),
+      });
+    } catch {}
 
     try {
       const recipientId = String(targetUserId);
