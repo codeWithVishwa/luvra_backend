@@ -1,6 +1,10 @@
 import express from "express";
 import {
 	register,
+	onboardingStart,
+	onboardingResendOtp,
+	onboardingVerifyEmail,
+	onboardingComplete,
 	login,
 	sendVerification,
 	verifyEmail,
@@ -22,6 +26,10 @@ import { authLimiter } from "../middleware/rateLimit.js";
 const router = express.Router();
 
 router.post("/register", authLimiter, register);
+router.post("/onboarding/start", authLimiter, onboardingStart);
+router.post("/onboarding/resend-otp", authLimiter, onboardingResendOtp);
+router.post("/onboarding/verify-email", authLimiter, onboardingVerifyEmail);
+router.post("/onboarding/complete", authLimiter, onboardingComplete);
 router.post("/login", authLimiter, login);
 router.post("/send-verification", authLimiter, sendVerification);
 router.get("/verify-email", verifyEmail);

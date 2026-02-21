@@ -36,7 +36,7 @@ const conversationSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     inviteCode: { type: String, trim: true, default: undefined },
     inviteEnabled: { type: Boolean, default: true },
-    directPairKey: { type: String, unique: true, sparse: true },
+    directPairKey: { type: String, default: undefined },
     sessionKeyVersion: { type: Number, default: 1 },
     lastMessage: {
       type: {
@@ -65,7 +65,8 @@ conversationSchema.pre("validate", function (next) {
       .sort()
       .join(":");
   } else {
-    this.directPairKey = null;
+    // Keep undefined for group chats so unique index does not consider this field.
+    this.directPairKey = undefined;
   }
   next();
 });
@@ -80,7 +81,15 @@ conversationSchema.index(
     },
   }
 );
-// Unique index already created by `unique: true` on directPairKey; no need to add another.
+conversationSchema.index(
+  { directPairKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      directPairKey: { $exists: true, $type: "string", $ne: "" },
+    },
+  }
+);
 conversationSchema.index({ updatedAt: -1 });
 
 export default mongoose.model("Conversation", conversationSchema);

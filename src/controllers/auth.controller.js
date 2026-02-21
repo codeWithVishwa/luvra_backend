@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import User from "../models/user.model.js";
+import OnboardingDraft from "../models/onboardingDraft.model.js";
 import { sendEmail, buildApiUrl, buildAppUrl, getEmailHealth } from "../utils/email.js";
 import { generateVerifyEmailTemplate, generateResetPasswordTemplate, generateVerifyEmailOtpTemplate, generateResetPasswordOtpTemplate, generateVaultPinResetOtpTemplate } from "../utils/emailTemplates.js";
 import { suggestUsernames } from "../utils/nameSuggestions.js";
@@ -57,6 +58,14 @@ function getWebRefreshCookieOptions(req) {
 
 function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function makeOtpCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function makeOtpHash(code) {
+  return crypto.createHash("sha256").update(String(code)).digest("hex");
 }
 
 function newJti() {
@@ -194,6 +203,181 @@ export const register = async (req, res) => {
       return res.status(409).json({ message: 'Username already taken', suggestions });
     }
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const onboardingStart = async (req, res) => {
+  try {
+    const email = (req.body?.email || "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ message: "Email is required" });
+    if (!/\S+@\S+\.\S+/.test(email)) return res.status(400).json({ message: "Invalid email format" });
+
+    const existingUser = await User.findOne({ email }).select("_id verified");
+    if (existingUser?.verified) {
+      return res.status(409).json({ message: "Email already registered. Please log in." });
+    }
+    if (existingUser && !existingUser.verified) {
+      return res.status(409).json({ message: "Email already exists in pending registration. Please use the existing verification flow." });
+    }
+
+    const otp = makeOtpCode();
+    const otpHash = makeOtpHash(otp);
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    const draft = await OnboardingDraft.findOneAndUpdate(
+      { email },
+      {
+        $set: {
+          email,
+          emailOtpHash: otpHash,
+          emailOtpExpires: otpExpires,
+          emailVerified: false,
+          expiresAt,
+        },
+      },
+      { new: true, upsert: true }
+    );
+
+    sendEmail({
+      to: email,
+      subject: "Your verification code",
+      html: generateVerifyEmailOtpTemplate("there", otp),
+    }).catch((e) => console.error("[onboardingStart] Email send failed:", e.message));
+
+    return res.status(200).json({
+      message: "Verification code sent",
+      draftId: draft._id,
+      email,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const onboardingResendOtp = async (req, res) => {
+  try {
+    const email = (req.body?.email || "").trim().toLowerCase();
+    const draftId = req.body?.draftId;
+    if (!email || !draftId) return res.status(400).json({ message: "Email and draftId are required" });
+    const draft = await OnboardingDraft.findOne({ _id: draftId, email });
+    if (!draft) return res.status(404).json({ message: "Onboarding session not found. Start again." });
+    if (draft.emailVerified) return res.status(400).json({ message: "Email already verified" });
+
+    const otp = makeOtpCode();
+    draft.emailOtpHash = makeOtpHash(otp);
+    draft.emailOtpExpires = new Date(Date.now() + 10 * 60 * 1000);
+    draft.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    await draft.save();
+
+    sendEmail({
+      to: email,
+      subject: "Your verification code",
+      html: generateVerifyEmailOtpTemplate("there", otp),
+    }).catch((e) => console.error("[onboardingResendOtp] Email send failed:", e.message));
+
+    return res.status(200).json({ message: "Verification code resent" });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const onboardingVerifyEmail = async (req, res) => {
+  try {
+    const email = (req.body?.email || "").trim().toLowerCase();
+    const draftId = req.body?.draftId;
+    const otp = String(req.body?.otp || "").trim();
+    if (!email || !draftId || !otp) {
+      return res.status(400).json({ message: "Email, draftId and OTP are required" });
+    }
+
+    const draft = await OnboardingDraft.findOne({ _id: draftId, email });
+    if (!draft) return res.status(404).json({ message: "Onboarding session not found. Start again." });
+    if (!draft.emailOtpHash || !draft.emailOtpExpires) {
+      return res.status(400).json({ message: "No active verification code. Request a new one." });
+    }
+    if (draft.emailOtpExpires < new Date()) {
+      return res.status(400).json({ message: "Verification code expired. Request a new one." });
+    }
+    if (makeOtpHash(otp) !== draft.emailOtpHash) {
+      return res.status(400).json({ message: "Invalid verification code" });
+    }
+
+    draft.emailVerified = true;
+    draft.emailOtpHash = null;
+    draft.emailOtpExpires = null;
+    draft.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    await draft.save();
+
+    return res.status(200).json({ message: "Email verified", draftId: draft._id, email: draft.email });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const onboardingComplete = async (req, res) => {
+  try {
+    const email = (req.body?.email || "").trim().toLowerCase();
+    const draftId = req.body?.draftId;
+    const password = String(req.body?.password || "");
+    const cleanName = String(req.body?.name || "").trim();
+    const phone = String(req.body?.phone || "").trim();
+    const interestsRaw = Array.isArray(req.body?.interests) ? req.body.interests : [];
+    const interests = interestsRaw
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .slice(0, 6);
+
+    if (!email || !draftId) return res.status(400).json({ message: "Email and draftId are required" });
+    if (!cleanName) return res.status(400).json({ message: "Username is required" });
+    if (!password || password.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters long" });
+    }
+
+    const draft = await OnboardingDraft.findOne({ _id: draftId, email });
+    if (!draft) return res.status(404).json({ message: "Onboarding session not found. Start again." });
+    if (!draft.emailVerified) return res.status(400).json({ message: "Please verify your email first" });
+
+    const existingUser = await User.findOne({ email }).select("_id");
+    if (existingUser) return res.status(409).json({ message: "Email already registered. Please log in." });
+
+    const existingName = await User.findOne({ nameLower: cleanName.toLowerCase() }).select("_id");
+    if (existingName) {
+      const suggestions = await suggestUsernames(cleanName);
+      return res.status(409).json({ message: "Username already taken", suggestions });
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      name: cleanName,
+      email,
+      password: hashed,
+      verified: true,
+      phone: phone || null,
+      interests,
+    });
+
+    await OnboardingDraft.deleteOne({ _id: draft._id }).catch(() => {});
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "120d" });
+    const safeUser = {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      verified: user.verified,
+      nickname: user.nickname,
+      avatarUrl: user.avatarUrl || null,
+      phone: user.phone || null,
+      interests: user.interests || [],
+    };
+
+    return res.status(201).json({ message: "Account created successfully", token, user: safeUser });
+  } catch (error) {
+    if (error?.code === 11000 && error?.keyPattern?.nameLower) {
+      const suggestions = await suggestUsernames(req.body?.name);
+      return res.status(409).json({ message: "Username already taken", suggestions });
+    }
+    return res.status(500).json({ error: error.message });
   }
 };
 
