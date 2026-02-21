@@ -49,6 +49,7 @@ function generateVideoThumbnail(inputPath, outputPath) {
 const MAX_VIDEO_SECONDS = 20;
 const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 const ALLOWED_VIDEO_FORMAT = "mp4";
+const ALLOWED_SOURCE_VIDEO_FORMATS = new Set(["mp4", "mov", "m4v", "webm", "3gp", "mkv"]);
 const MAX_MEDIA_PER_POST = 4;
 const VIDEO_UPLOAD_TRANSFORMATION = "q_auto:good,vc_auto";
 const VIEW_COOLDOWN_MS = 2 * 60 * 60 * 1000;
@@ -104,17 +105,17 @@ async function validateCloudinaryVideoMediaItem(item) {
   if (bytes > MAX_VIDEO_BYTES) {
     throw new Error("Video size exceeds 20MB.");
   }
-  if (format !== ALLOWED_VIDEO_FORMAT) {
-    throw new Error("Only mp4 video format is allowed.");
+  if (!ALLOWED_SOURCE_VIDEO_FORMATS.has(format)) {
+    throw new Error("Unsupported video format.");
   }
 
   const optimizedUrl = cloudinary.v2.url(publicId, {
     resource_type: "video",
     secure: true,
+    format: "mp4",
     transformation: [
       {
-        fetch_format: "auto",
-        quality: "auto",
+        quality: "auto:good",
         video_codec: "auto",
       },
     ],
@@ -135,7 +136,7 @@ async function validateCloudinaryVideoMediaItem(item) {
     width: resource.width,
     height: resource.height,
     durationSeconds: Math.round(durationSeconds),
-    format,
+    format: ALLOWED_VIDEO_FORMAT,
     bytes,
   };
 }
@@ -373,8 +374,6 @@ export const generateVideoUploadSignature = async (req, res) => {
       timestamp,
       folder,
       resource_type: "video",
-      allowed_formats: ALLOWED_VIDEO_FORMAT,
-      max_file_size: MAX_VIDEO_BYTES,
       transformation: VIDEO_UPLOAD_TRANSFORMATION,
       eager,
       eager_async: "false",
