@@ -30,13 +30,14 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 const app = express();
 validateEnv();
+app.disable("x-powered-by");
 
 // Trust first proxy (Render/Heroku/NGINX) so rate limiting & IP detection works
 // This addresses express-rate-limit ValidationError about X-Forwarded-For
 app.set('trust proxy', 1);
 
 // CORS
-const allowedOrigins = [
+const configuredOrigins = [
   process.env.FRONTEND_URL,
   process.env.APP_BASE_URL,
   'http://localhost:19006', // Expo web dev
@@ -44,6 +45,22 @@ const allowedOrigins = [
   'http://localhost:5173', // Vite default
   'http://127.0.0.1:5173'
 ].filter(Boolean);
+
+const normalizeOrigin = (value) => {
+  if (!value || typeof value !== "string") return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+};
+
+const allowedOrigins = new Set(
+  configuredOrigins
+    .map(normalizeOrigin)
+    .filter(Boolean)
+);
 
 app.use(
   cors({
@@ -53,7 +70,8 @@ app.use(
       if (/^https?:\/\/localhost(?::\d+)?$/i.test(origin) || /^https?:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin)) {
         return callback(null, true);
       }
-      if (allowedOrigins.some((o) => origin.startsWith(o))) return callback(null, true);
+      const normalized = normalizeOrigin(origin);
+      if (normalized && allowedOrigins.has(normalized)) return callback(null, true);
       // In non-production, be permissive to ease dev
       if (process.env.NODE_ENV !== 'production') return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
@@ -63,8 +81,8 @@ app.use(
 );
 
 // Parse first
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: true, limit: "2mb", parameterLimit: 200 }));
 app.use(cookieParser());
 
 // Security headers
@@ -102,11 +120,30 @@ function deepSanitizeInPlace(value) {
   return value;
 }
 
+// Remove dangerous keys ($ operators / dotted keys) to reduce NoSQL injection risk.
+function stripDangerousObjectKeys(value) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((entry) => stripDangerousObjectKeys(entry));
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key.startsWith("$") || key.includes(".")) {
+      delete value[key];
+      continue;
+    }
+    stripDangerousObjectKeys(value[key]);
+  }
+}
+
 app.use((req, res, next) => {
   // IMPORTANT: only mutate; do not reassign req.query
   deepSanitizeInPlace(req.body);
   deepSanitizeInPlace(req.params);
   deepSanitizeInPlace(req.query);
+  stripDangerousObjectKeys(req.body);
+  stripDangerousObjectKeys(req.params);
+  stripDangerousObjectKeys(req.query);
   next();
 });
 

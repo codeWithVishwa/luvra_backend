@@ -7,7 +7,13 @@ export default async function auth(req, res, next) {
     const [, token] = header.split(" ");
     if (!token) return res.status(401).json({ message: "Missing Authorization token" });
 
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const jwtVerifyOptions = {
+      algorithms: ["HS256"],
+    };
+    if (process.env.JWT_ISSUER) jwtVerifyOptions.issuer = process.env.JWT_ISSUER;
+    if (process.env.JWT_AUDIENCE) jwtVerifyOptions.audience = process.env.JWT_AUDIENCE;
+
+    const payload = jwt.verify(token, process.env.JWT_SECRET, jwtVerifyOptions);
     const user = await User.findById(payload.id).select("_id name nickname email verified avatarUrl");
     if (!user) return res.status(401).json({ message: "Invalid token" });
 

@@ -17,9 +17,37 @@ const userActiveCall = new Map(); // userId -> callId
 const userSocketIds = new Map();
 
 export function initSocket(server) {
+  const configuredOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.APP_BASE_URL,
+    "http://localhost:19006",
+    "http://127.0.0.1:19006",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ].filter(Boolean);
+
+  const normalizeOrigin = (value) => {
+    if (!value || typeof value !== "string") return null;
+    try {
+      return new URL(value).origin;
+    } catch {
+      return null;
+    }
+  };
+  const allowedOrigins = new Set(configuredOrigins.map(normalizeOrigin).filter(Boolean));
+
   io = new Server(server, {
     cors: {
-      origin: (origin, cb) => cb(null, true),
+      origin: (origin, cb) => {
+        if (!origin) return cb(null, true);
+        if (process.env.NODE_ENV !== "production") return cb(null, true);
+        if (/^https?:\/\/localhost(?::\d+)?$/i.test(origin) || /^https?:\/\/127\.0\.0\.1(?::\d+)?$/i.test(origin)) {
+          return cb(null, true);
+        }
+        const normalized = normalizeOrigin(origin);
+        if (normalized && allowedOrigins.has(normalized)) return cb(null, true);
+        return cb(new Error("Not allowed by CORS"));
+      },
       credentials: true,
     },
   });
