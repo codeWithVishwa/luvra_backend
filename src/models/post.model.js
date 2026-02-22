@@ -22,6 +22,7 @@ const postSchema = new mongoose.Schema(
   {
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     caption: { type: String, trim: true, maxlength: 500 },
+    tags: { type: [String], default: [] },
     media: { type: [mediaSchema], default: [] },
     visibility: { type: String, enum: ["public", "private"], default: "public" },
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
@@ -37,5 +38,7 @@ const postSchema = new mongoose.Schema(
 
 postSchema.index({ author: 1, createdAt: -1 });
 postSchema.index({ createdAt: -1 });
+postSchema.index({ tags: 1, createdAt: -1 });
+postSchema.index({ caption: "text", tags: "text" });
 
 export default mongoose.model("Post", postSchema);

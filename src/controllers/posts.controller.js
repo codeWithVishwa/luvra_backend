@@ -53,9 +53,72 @@ const ALLOWED_SOURCE_VIDEO_FORMATS = new Set(["mp4", "mov", "m4v", "webm", "3gp"
 const MAX_MEDIA_PER_POST = 4;
 const VIDEO_UPLOAD_TRANSFORMATION = "q_auto:good,vc_auto";
 const VIEW_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const CLOUDINARY_RESOURCE_RETRY_DELAYS_MS = [250, 600, 1200];
+const MAX_TAGS_PER_POST = 20;
+const MAX_INTEREST_TOKENS = 8;
 
 function safeString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeTag(value) {
+  if (!value) return "";
+  return String(value).trim().toLowerCase().replace(/[^a-z0-9_#\s-]/g, "").replace(/\s+/g, " ");
+}
+
+function extractHashtags(caption) {
+  if (!caption) return [];
+  const tags = caption.match(/#([A-Za-z0-9_]+)/g) || [];
+  return tags.map((t) => normalizeTag(t.replace("#", ""))).filter(Boolean);
+}
+
+function buildInterestRegex(interests) {
+  if (!Array.isArray(interests) || interests.length === 0) return null;
+  const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = interests.map(escapeRegex).filter(Boolean);
+  if (!parts.length) return null;
+  return new RegExp(`\\b(${parts.join("|")})\\b`, "i");
+}
+
+function scorePostByInterests(post, interestSet) {
+  if (!post || !interestSet || interestSet.size === 0) return 0;
+  const tags = Array.isArray(post.tags) ? post.tags : [];
+  let matchCount = 0;
+  tags.forEach((tag) => {
+    const normalized = normalizeTag(tag);
+    if (normalized && interestSet.has(normalized)) matchCount += 1;
+  });
+  const caption = normalizeTag(post.caption || "");
+  let captionHits = 0;
+  if (caption) {
+    for (const interest of interestSet) {
+      if (caption.includes(interest)) captionHits += 1;
+    }
+  }
+  const likes = Array.isArray(post.likes) ? post.likes.length : 0;
+  const comments = typeof post.commentCount === "number" ? post.commentCount : 0;
+  const views = Math.max(Number(post.viewCount || 0), Number(post.playCount || 0), 0);
+  const ageHours = Math.max(1, (Date.now() - new Date(post.createdAt).getTime()) / (1000 * 60 * 60));
+  const freshness = Math.max(0, 36 - ageHours);
+  return matchCount * 8 + captionHits * 3 + likes * 2 + comments * 2 + views * 0.3 + freshness * 0.4;
+}
+
+function interleavePosts(primary, recommended, limit) {
+  const result = [];
+  let recIdx = 0;
+  const every = 3;
+  for (let i = 0; i < primary.length && result.length < limit; i += 1) {
+    result.push(primary[i]);
+    if ((i + 1) % every === 0 && recIdx < recommended.length && result.length < limit) {
+      result.push(recommended[recIdx]);
+      recIdx += 1;
+    }
+  }
+  while (recIdx < recommended.length && result.length < limit) {
+    result.push(recommended[recIdx]);
+    recIdx += 1;
+  }
+  return result;
 }
 
 function parseCloudinaryPublicIdFromUrl(url) {
@@ -87,9 +150,21 @@ async function validateCloudinaryVideoMediaItem(item) {
     throw new Error("Video publicId is required.");
   }
 
-  const resource = await cloudinary.v2.api.resource(publicId, {
-    resource_type: "video",
-  });
+  const fetchVideoResource = async (id) => {
+    let lastErr = null;
+    for (let i = 0; i <= CLOUDINARY_RESOURCE_RETRY_DELAYS_MS.length; i += 1) {
+      try {
+        return await cloudinary.v2.api.resource(id, { resource_type: "video" });
+      } catch (err) {
+        lastErr = err;
+        if (i >= CLOUDINARY_RESOURCE_RETRY_DELAYS_MS.length) break;
+        await new Promise((resolve) => setTimeout(resolve, CLOUDINARY_RESOURCE_RETRY_DELAYS_MS[i]));
+      }
+    }
+    throw lastErr;
+  };
+
+  const resource = await fetchVideoResource(publicId);
 
   if (!resource?.secure_url) {
     throw new Error("Video asset not found in Cloudinary.");
@@ -152,10 +227,11 @@ async function getFollowingIds(userId) {
 
 function serializePost(post, viewerId, savedSet) {
   const likes = Array.isArray(post.likes) ? post.likes.map((id) => String(id)) : [];
-  return {
-    _id: post._id,
-    caption: post.caption,
-    media: post.media,
+    return {
+      _id: post._id,
+      caption: post.caption,
+      tags: Array.isArray(post.tags) ? post.tags : [],
+      media: post.media,
     visibility: post.visibility,
     createdAt: post.createdAt,
     durationSeconds: Array.isArray(post.media)
@@ -404,7 +480,13 @@ export const createPost = async (req, res) => {
     if (!author) return res.status(404).json({ message: "User not found" });
 
     const caption = typeof req.body.caption === "string" ? req.body.caption.trim().slice(0, 500) : "";
-    const incomingMedia = Array.isArray(req.body.media) ? req.body.media : [];
+      const incomingMedia = Array.isArray(req.body.media) ? req.body.media : [];
+      const incomingTags = Array.isArray(req.body.tags) ? req.body.tags : [];
+      const tags = Array.from(new Set([
+        ...incomingTags.map(normalizeTag),
+        ...extractHashtags(caption),
+      ].filter(Boolean)))
+        .slice(0, MAX_TAGS_PER_POST);
     const mediaInput = incomingMedia
       .slice(0, MAX_MEDIA_PER_POST)
       .map((item) => ({
@@ -452,12 +534,13 @@ export const createPost = async (req, res) => {
       }
     }
 
-    const post = await Post.create({
-      author: author._id,
-      caption,
-      media,
-      visibility: author.isPrivate ? "private" : "public",
-    });
+      const post = await Post.create({
+        author: author._id,
+        caption,
+        tags,
+        media,
+        visibility: author.isPrivate ? "private" : "public",
+      });
 
     const populated = await post.populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
     res.status(201).json({ post: serializePost(populated, req.user._id, new Set()) });
@@ -471,7 +554,13 @@ export const listFeedPosts = async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
     const savedSet = await getSavedSetForUser(req.user._id);
-    
+
+    const me = await User.findById(req.user._id).select("_id interests");
+    const interests = Array.isArray(me?.interests)
+      ? me.interests.map(normalizeTag).filter(Boolean).slice(0, MAX_INTEREST_TOKENS)
+      : [];
+    const interestSet = new Set(interests);
+
     // Feed consists of posts from people I follow + my own posts
     const followingIds = await getFollowingIds(req.user._id);
     const authors = Array.from(followingIds);
@@ -490,9 +579,65 @@ export const listFeedPosts = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
-    const serialized = posts.map((p) => serializePost(p, req.user._id));
-    const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt.toISOString() : null;
-    res.json({ posts: serialized, nextCursor });
+    const serializedPrimary = posts.map((p) => serializePost(p, req.user._id, savedSet));
+    const seenIds = new Set(serializedPrimary.map((p) => String(p._id)));
+
+    const basePublicQuery = {
+      visibility: "public",
+      author: { $nin: authors },
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+    };
+    if (before && !isNaN(before.getTime())) {
+      basePublicQuery.createdAt = { $lt: before };
+    }
+
+    let recommendedSerialized = [];
+    if (interests.length) {
+      const interestRegex = buildInterestRegex(interests);
+      const interestQuery = {
+        ...basePublicQuery,
+        $or: [
+          { tags: { $in: interests } },
+          ...(interestRegex ? [{ caption: { $regex: interestRegex } }] : []),
+        ],
+      };
+      const interestCandidates = await Post.find(interestQuery)
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+      const scored = interestCandidates
+        .map((post) => ({ post, score: scorePostByInterests(post, interestSet) }))
+        .sort((a, b) => (b.score || 0) - (a.score || 0));
+      recommendedSerialized = scored
+        .map((entry) => serializePost(entry.post, req.user._id, savedSet))
+        .filter((p) => !seenIds.has(String(p._id)));
+    }
+
+    const targetRecommended = Math.max(4, Math.round(limit * 0.35));
+    recommendedSerialized = recommendedSerialized.slice(0, targetRecommended);
+    recommendedSerialized.forEach((p) => seenIds.add(String(p._id)));
+
+    let merged = interleavePosts(serializedPrimary, recommendedSerialized, limit);
+
+    if (merged.length < limit) {
+      const fallbackCandidates = await Post.find(basePublicQuery)
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+      const fallbackSerialized = fallbackCandidates
+        .map((p) => serializePost(p, req.user._id, savedSet))
+        .filter((p) => !seenIds.has(String(p._id)));
+      merged = merged.concat(fallbackSerialized).slice(0, limit);
+    }
+
+    const oldest = merged
+      .map((p) => new Date(p.createdAt))
+      .filter((d) => !isNaN(d.getTime()))
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    const nextCursor = oldest ? oldest.toISOString() : null;
+
+    res.json({ posts: merged, nextCursor });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -787,21 +932,23 @@ export const listPostComments = async (req, res) => {
     }
     const nextCursor = comments.length === limit ? comments[comments.length - 1].createdAt.toISOString() : null;
     const savedSet = await getSavedSetForUser(req.user._id);
-    const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
-    const postPreview = {
-      _id: post._id,
-      authorId: post.author?._id || post.author,
-      authorName: post.author?.name,
-      authorAvatar: post.author?.avatarUrl,
-      authorVerified: !!post.author?.isVerified,
-      authorVerificationType: post.author?.verificationType || null,
-      caption: post.caption,
-      media: previewMedia,
-      createdAt: post.createdAt,
-      hideLikeCount: !!post.hideLikeCount,
-      commentsDisabled: !!post.commentsDisabled,
-      savedByMe: savedSet.has(String(post._id)),
-    };
+      const previewMedia = Array.isArray(post.media) && post.media.length ? post.media[0] : null;
+      const mediaList = Array.isArray(post.media) ? post.media : [];
+      const postPreview = {
+        _id: post._id,
+        authorId: post.author?._id || post.author,
+        authorName: post.author?.name,
+        authorAvatar: post.author?.avatarUrl,
+        authorVerified: !!post.author?.isVerified,
+        authorVerificationType: post.author?.verificationType || null,
+        caption: post.caption,
+        media: previewMedia,
+        mediaList,
+        createdAt: post.createdAt,
+        hideLikeCount: !!post.hideLikeCount,
+        commentsDisabled: !!post.commentsDisabled,
+        savedByMe: savedSet.has(String(post._id)),
+      };
     res.json({ comments: serialized, nextCursor, post: postPreview, anchorCommentId });
   } catch (e) {
     res.status(500).json({ message: e.message });
