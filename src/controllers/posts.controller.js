@@ -446,14 +446,13 @@ export const generateVideoUploadSignature = async (req, res) => {
     const timestamp = Math.floor(Date.now() / 1000);
     const folder = `flowsnap/posts/${String(req.user._id)}`;
     const eager = "f_auto,q_auto,vc_auto";
-    const paramsToSign = {
-      timestamp,
-      folder,
-      resource_type: "video",
-      transformation: VIDEO_UPLOAD_TRANSFORMATION,
-      eager,
-      eager_async: "false",
-    };
+      const paramsToSign = {
+        timestamp,
+        folder,
+        transformation: VIDEO_UPLOAD_TRANSFORMATION,
+        eager,
+        eager_async: "false",
+      };
     const signature = cloudinary.v2.utils.api_sign_request(paramsToSign, cfg.api_secret);
 
     return res.json({
