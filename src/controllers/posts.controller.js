@@ -56,6 +56,7 @@ const VIEW_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const CLOUDINARY_RESOURCE_RETRY_DELAYS_MS = [250, 600, 1200];
 const MAX_TAGS_PER_POST = 20;
 const MAX_INTEREST_TOKENS = 8;
+const ADULT_SIGNAL_TAGS = new Set(["adult", "mature", "hood", "nsfw", "18plus", "dark"]);
 
 function safeString(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -70,6 +71,20 @@ function extractHashtags(caption) {
   if (!caption) return [];
   const tags = caption.match(/#([A-Za-z0-9_]+)/g) || [];
   return tags.map((t) => normalizeTag(t.replace("#", ""))).filter(Boolean);
+}
+
+function parseBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    return v === "true" || v === "1" || v === "yes";
+  }
+  return false;
+}
+
+function hasAdultSignal(tags) {
+  if (!Array.isArray(tags)) return false;
+  return tags.some((t) => ADULT_SIGNAL_TAGS.has(normalizeTag(t)));
 }
 
 function buildInterestRegex(interests) {
@@ -255,6 +270,7 @@ function serializePost(post, viewerId, savedSet) {
       _id: post._id,
       caption: post.caption,
       tags: Array.isArray(post.tags) ? post.tags : [],
+      isAdult: !!post.isAdult,
       media: post.media,
     visibility: post.visibility,
     createdAt: post.createdAt,
@@ -510,6 +526,8 @@ export const createPost = async (req, res) => {
         ...extractHashtags(caption),
       ].filter(Boolean)))
         .slice(0, MAX_TAGS_PER_POST);
+      const explicitAdult = parseBoolean(req.body?.isAdult);
+      const isAdult = explicitAdult || hasAdultSignal(tags);
     const mediaInput = incomingMedia
       .slice(0, MAX_MEDIA_PER_POST)
       .map((item) => ({
@@ -561,6 +579,7 @@ export const createPost = async (req, res) => {
         author: author._id,
         caption,
         tags,
+        isAdult,
         media,
         visibility: author.isPrivate ? "private" : "public",
       });
@@ -646,8 +665,12 @@ export const listFeedPosts = async (req, res) => {
         const likedCaptionScore = overlapCount(likedTokenSet, captionTokens) * 2.2;
         const engagementScore = likes * 1.8 + comments * 1.6 + views * 0.12;
         const affinityScore = (isFollowing ? 4.5 : 0) + publicDiscover * 1.4;
+        const postAdult = !!post.isAdult || hasAdultSignal(tags);
+        const coldStart = likedPosts.length < 3;
+        const adultInterest = interestTokens.some((t) => ADULT_SIGNAL_TAGS.has(t));
         const randomJitter = Math.random() * 6.2;
-        const finalScore = interestScore + likedTagScore + likedCaptionScore + engagementScore + freshness * 0.35 + affinityScore + randomJitter;
+        const adultBoost = postAdult ? (coldStart ? 2.8 : (adultInterest ? 1.4 : 0.5)) : 0;
+        const finalScore = interestScore + likedTagScore + likedCaptionScore + engagementScore + freshness * 0.35 + affinityScore + adultBoost + randomJitter;
         return { post, finalScore };
       })
       .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
