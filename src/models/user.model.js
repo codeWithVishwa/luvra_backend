@@ -63,8 +63,12 @@ const userSchema = new mongoose.Schema(
       {
         tokenHash: { type: String, required: true },
         createdAt: { type: Date, default: Date.now },
+        lastUsedAt: { type: Date, default: Date.now },
         expiresAt: { type: Date, required: true },
         userAgent: { type: String, default: null },
+        deviceId: { type: String, default: null },
+        deviceName: { type: String, default: null },
+        ip: { type: String, default: null },
       },
     ],
     // Lowercase name for uniqueness enforcement (case-insensitive)
@@ -89,6 +93,7 @@ const userSchema = new mongoose.Schema(
     status:{
       type: String, enum: ["active", "banned", "suspended", "deactivated"], default: 'active'
     },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     deactivatedAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
     isDeleted: { type: Boolean, default: false }

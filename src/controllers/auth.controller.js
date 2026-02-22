@@ -97,6 +97,22 @@ function safeUserShape(user) {
   };
 }
 
+function getRequestIp(req) {
+  const ipHeader = (req.headers?.["x-forwarded-for"] || "").toString();
+  const forwardedIp = ipHeader.split(",")[0]?.trim();
+  return forwardedIp || req.headers?.["x-real-ip"] || req.ip || null;
+}
+
+function makeSessionId(tokenHash) {
+  if (!tokenHash) return null;
+  return crypto.createHash("sha256").update(String(tokenHash)).digest("hex").slice(0, 24);
+}
+
+function sanitizeUserAgent(userAgent) {
+  if (!userAgent || typeof userAgent !== "string") return null;
+  return userAgent.trim().slice(0, 300);
+}
+
 const htmlPage = ({ title, heading, body, success, ctaLink, ctaText }) => `<!doctype html>
 <html lang="en">
 <head>
@@ -799,7 +815,11 @@ export const loginWeb = async (req, res) => {
 
     const tokenHash = hashToken(refreshToken);
     const expiresAt = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
-    const userAgent = req.get("user-agent") || null;
+    const userAgent = sanitizeUserAgent(req.get("user-agent"));
+    const deviceId = (req.get("x-device-id") || "").trim().slice(0, 120) || null;
+    const deviceName = (req.get("x-device-name") || "").trim().slice(0, 120) || null;
+    const ip = getRequestIp(req);
+    const now = new Date();
 
     // Use atomic update to avoid Mongoose VersionError when other endpoints update the user concurrently
     await User.updateOne(
@@ -807,7 +827,7 @@ export const loginWeb = async (req, res) => {
       {
         $push: {
           refreshTokens: {
-            $each: [{ tokenHash, expiresAt, userAgent }],
+            $each: [{ tokenHash, expiresAt, userAgent, deviceId, deviceName, ip, createdAt: now, lastUsedAt: now }],
             $slice: -refreshMaxSessions,
           },
         },
@@ -869,7 +889,10 @@ export const refreshWeb = async (req, res) => {
     const newRefreshToken = signWebRefreshToken(user._id);
     const newTokenHash = hashToken(newRefreshToken);
     const newExpiresAt = new Date(Date.now() + refreshDays * 24 * 60 * 60 * 1000);
-    const userAgent = req.get("user-agent") || null;
+    const userAgent = sanitizeUserAgent(req.get("user-agent"));
+    const deviceId = (req.get("x-device-id") || "").trim().slice(0, 120) || null;
+    const deviceName = (req.get("x-device-name") || "").trim().slice(0, 120) || null;
+    const ip = getRequestIp(req);
 
     // Atomic update avoids version conflicts with concurrent user updates (e.g., push token updates)
     // NOTE: MongoDB forbids updating the same path in multiple operators in one update
@@ -903,7 +926,16 @@ export const refreshWeb = async (req, res) => {
                     {
                       $concatArrays: [
                         "$$filtered",
-                        [{ tokenHash: newTokenHash, expiresAt: newExpiresAt, userAgent }],
+                        [{
+                          tokenHash: newTokenHash,
+                          expiresAt: newExpiresAt,
+                          userAgent,
+                          deviceId,
+                          deviceName,
+                          ip,
+                          createdAt: now,
+                          lastUsedAt: now,
+                        }],
                       ],
                     },
                     -refreshMaxSessions,
@@ -947,5 +979,78 @@ export const logoutWeb = async (req, res) => {
     const { refreshCookieName } = getWebAuthConfig();
     res.clearCookie(refreshCookieName, getWebRefreshCookieOptions(req));
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const listWebSessions = async (req, res) => {
+  try {
+    const { refreshCookieName } = getWebAuthConfig();
+    const refreshToken = req.cookies?.[refreshCookieName] || null;
+    const currentTokenHash = refreshToken ? hashToken(refreshToken) : null;
+    const now = new Date();
+
+    const user = await User.findById(req.user?._id).select("_id refreshTokens");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const sessions = (Array.isArray(user.refreshTokens) ? user.refreshTokens : [])
+      .filter((token) => !token?.expiresAt || token.expiresAt >= now)
+      .map((token) => ({
+        sessionId: makeSessionId(token.tokenHash),
+        isCurrent: currentTokenHash ? token.tokenHash === currentTokenHash : false,
+        createdAt: token.createdAt || null,
+        lastUsedAt: token.lastUsedAt || token.createdAt || null,
+        expiresAt: token.expiresAt || null,
+        deviceName: token.deviceName || null,
+        deviceId: token.deviceId || null,
+        userAgent: token.userAgent || null,
+        ip: token.ip || null,
+      }))
+      .sort((a, b) => new Date(b.lastUsedAt || 0) - new Date(a.lastUsedAt || 0));
+
+    return res.json({ sessions });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const revokeWebSession = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) return res.status(400).json({ message: "sessionId is required" });
+    const user = await User.findById(req.user?._id).select("_id refreshTokens");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const sessions = Array.isArray(user.refreshTokens) ? user.refreshTokens : [];
+    const target = sessions.find((token) => makeSessionId(token.tokenHash) === String(sessionId));
+    if (!target) return res.status(404).json({ message: "Session not found" });
+
+    await User.updateOne(
+      { _id: user._id },
+      { $pull: { refreshTokens: { tokenHash: target.tokenHash } } }
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+export const revokeOtherWebSessions = async (req, res) => {
+  try {
+    const { refreshCookieName } = getWebAuthConfig();
+    const refreshToken = req.cookies?.[refreshCookieName];
+    if (!refreshToken) return res.status(401).json({ message: "Missing refresh token cookie" });
+    const keepTokenHash = hashToken(refreshToken);
+
+    await User.updateOne(
+      { _id: req.user?._id },
+      {
+        $pull: {
+          refreshTokens: { tokenHash: { $ne: keepTokenHash } },
+        },
+      },
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 };

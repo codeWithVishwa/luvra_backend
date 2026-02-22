@@ -543,7 +543,7 @@ export const listContacts = async (req, res) => {
 
 export const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following allowGroupAdds allowLocationDiscovery");
+    const user = await User.findById(req.user._id).select("_id name nickname email avatarUrl gender interests bio verified isVerified verificationType honorScore profileLikes isPrivate followers following allowGroupAdds allowLocationDiscovery");
     if (!user) return res.status(404).json({ message: 'User not found' });
     const profileLikeCount = Array.isArray(user.profileLikes) ? user.profileLikes.length : 0;
     const [postCount, followerCount, followingCount] = await Promise.all([
@@ -561,6 +561,7 @@ export const getProfile = async (req, res) => {
       nickname: user.nickname,
       email: user.email,
       avatarUrl: user.avatarUrl,
+      gender: user.gender,
       interests: user.interests,
       bio: user.bio,
       verified: user.verified,
@@ -580,7 +581,7 @@ export const getProfile = async (req, res) => {
 
 export const updateProfile = async (req, res) => {
   try {
-    const { name, nickname, interests, bio } = req.body;
+    const { name, nickname, interests, bio, gender } = req.body;
     const isPrivateProvided = Object.prototype.hasOwnProperty.call(req.body, 'isPrivate');
     const allowGroupAddsProvided = Object.prototype.hasOwnProperty.call(req.body, 'allowGroupAdds');
     const allowLocationProvided = Object.prototype.hasOwnProperty.call(req.body, 'allowLocationDiscovery');
@@ -626,6 +627,10 @@ export const updateProfile = async (req, res) => {
       const nextNick = typeof nickname === 'string' ? nickname.trim() : '';
       user.nickname = nextNick ? nextNick.slice(0, 40) : null;
     }
+    if (gender !== undefined) {
+      const nextGender = typeof gender === 'string' ? gender.trim().toLowerCase() : '';
+      user.gender = nextGender ? nextGender.slice(0, 32) : null;
+    }
     if (Array.isArray(interests)) user.interests = interests.slice(0, 20);
     if (typeof bio === 'string') user.bio = bio.slice(0, 300);
     let visibilityChanged = false;
@@ -662,6 +667,7 @@ export const updateProfile = async (req, res) => {
         nickname: user.nickname,
         email: user.email,
         avatarUrl: user.avatarUrl,
+        gender: user.gender,
         interests: user.interests,
       bio: user.bio,
       isPrivate: !!user.isPrivate,

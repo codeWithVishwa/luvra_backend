@@ -18,6 +18,9 @@ import {
 	loginWeb,
 	refreshWeb,
 	logoutWeb,
+	listWebSessions,
+	revokeWebSession,
+	revokeOtherWebSessions,
 	smtpHealth,
 } from "../controllers/auth.controller.js";
 import auth from "../middleware/auth.js";
@@ -45,6 +48,9 @@ router.post("/vault-pin-reset-verify", auth, verifyVaultPinResetOtp);
 router.post("/web/login", authLimiter, loginWeb);
 router.post("/web/refresh", authLimiter, refreshWeb);
 router.post("/web/logout", logoutWeb);
+router.get("/web/sessions", auth, listWebSessions);
+router.delete("/web/sessions/:sessionId", auth, revokeWebSession);
+router.post("/web/sessions/revoke-others", auth, revokeOtherWebSessions);
 
 router.get("/smtp-health", smtpHealth);
 

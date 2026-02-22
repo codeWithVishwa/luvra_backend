@@ -19,6 +19,8 @@ import errorHandler from "./middleware/errorHandler.js";
 import postRoutes from "./routes/posts.routes.js";
 import dayRoutes from "./routes/days.routes.js";
 import reportRoutes from "./routes/reports.routes.js";
+import systemRoutes from "./routes/system.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
 import User from "./models/user.model.js";
 // If you kept express-mongo-sanitize and are on an Express-5-safe version, you can import and use it here.
 // import mongoSanitize from "express-mongo-sanitize";
@@ -39,6 +41,7 @@ app.set('trust proxy', 1);
 // CORS
 const configuredOrigins = [
   process.env.FRONTEND_URL,
+  process.env.ADMIN_DASHBOARD_ORIGIN,
   process.env.APP_BASE_URL,
   'http://localhost:19006', // Expo web dev
   'http://127.0.0.1:19006',
@@ -161,6 +164,8 @@ app.use("/api/v1/chat", chatRoutes);
 app.use("/api/v1/posts", postRoutes);
 app.use("/api/v1/days", dayRoutes);
 app.use("/api/v1/reports", reportRoutes);
+app.use("/api/v1/system", systemRoutes);
+app.use("/api/v1/admin", adminRoutes);
 
 // Serve local uploads if present (fallback when Cloudinary isn't configured)
 // Files saved under /uploads will be exposed at /uploads/*

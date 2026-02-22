@@ -57,6 +57,8 @@ const CLOUDINARY_RESOURCE_RETRY_DELAYS_MS = [250, 600, 1200];
 const MAX_TAGS_PER_POST = 20;
 const MAX_INTEREST_TOKENS = 8;
 const ADULT_SIGNAL_TAGS = new Set(["adult", "mature", "hood", "nsfw", "18plus", "dark"]);
+const NIGHT_START_HOUR = 21; // 9 PM
+const NIGHT_END_HOUR = 5; // 5 AM
 
 function safeString(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -85,6 +87,11 @@ function parseBoolean(value) {
 function hasAdultSignal(tags) {
   if (!Array.isArray(tags)) return false;
   return tags.some((t) => ADULT_SIGNAL_TAGS.has(normalizeTag(t)));
+}
+
+function isNightTimeNow() {
+  const hour = new Date().getHours();
+  return hour >= NIGHT_START_HOUR || hour <= NIGHT_END_HOUR;
 }
 
 function buildInterestRegex(interests) {
@@ -597,11 +604,14 @@ export const listFeedPosts = async (req, res) => {
     const before = req.query.before ? new Date(req.query.before) : null;
     const savedSet = await getSavedSetForUser(req.user._id);
 
-    const me = await User.findById(req.user._id).select("_id interests");
+    const me = await User.findById(req.user._id).select("_id interests gender");
     const interestTokens = Array.isArray(me?.interests)
       ? me.interests.map(normalizeTag).filter(Boolean).slice(0, MAX_INTEREST_TOKENS)
       : [];
     const interestSet = new Set(interestTokens);
+    const gender = safeString(me?.gender).toLowerCase();
+    const isFemaleUser = new Set(["female", "woman", "girl", "f"]).has(gender);
+    const adultBoostMultiplier = isFemaleUser ? 0.25 : 1;
 
     const followingIds = await getFollowingIds(req.user._id);
     const followPlusSelf = new Set(Array.from(followingIds).concat([String(req.user._id)]));
@@ -669,7 +679,15 @@ export const listFeedPosts = async (req, res) => {
         const coldStart = likedPosts.length < 3;
         const adultInterest = interestTokens.some((t) => ADULT_SIGNAL_TAGS.has(t));
         const randomJitter = Math.random() * 6.2;
-        const adultBoost = postAdult ? (coldStart ? 2.8 : (adultInterest ? 1.4 : 0.5)) : 0;
+        const nightTime = isNightTimeNow();
+        const adultBoostRaw = postAdult
+          ? (
+            nightTime
+              ? (coldStart ? 2.8 : (adultInterest ? 1.4 : 0.6))
+              : (adultInterest ? 0.15 : 0)
+          )
+          : 0;
+        const adultBoost = adultBoostRaw * adultBoostMultiplier;
         const finalScore = interestScore + likedTagScore + likedCaptionScore + engagementScore + freshness * 0.35 + affinityScore + adultBoost + randomJitter;
         return { post, finalScore };
       })
@@ -843,6 +861,135 @@ export const searchClips = async (req, res) => {
 
     const serialized = posts.map((p) => serializePost(p, req.user._id, savedSet));
     res.json({ posts: serialized });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const listRelatedClips = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 12, 24);
+    const post = await Post.findById(postId).select("_id author tags caption visibility isDelete isDeleted");
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
+    if (!(await canViewPost(req.user._id, post))) return res.status(403).json({ message: "Not allowed" });
+
+    const sourceTags = Array.isArray(post.tags) ? post.tags.map(normalizeTag).filter(Boolean).slice(0, 10) : [];
+    const captionTokens = extractCaptionTokens(post.caption).slice(0, 5);
+    const query = {
+      _id: { $ne: post._id },
+      visibility: "public",
+      isDelete: { $ne: true },
+      isDeleted: { $ne: true },
+      media: { $elemMatch: { type: "video", url: { $exists: true, $ne: "" } } },
+    };
+
+    const optional = [];
+    if (sourceTags.length) optional.push({ tags: { $in: sourceTags } });
+    if (captionTokens.length) {
+      const regex = new RegExp(captionTokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i");
+      optional.push({ caption: regex });
+    }
+    if (optional.length) query.$or = optional;
+
+    const savedSet = await getSavedSetForUser(req.user._id);
+    const candidates = await Post.find(query)
+      .sort({ createdAt: -1 })
+      .limit(120)
+      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+
+    const scored = candidates.map((item) => {
+      const tagOverlap = sourceTags.length ? overlapCount(new Set(sourceTags), item.tags) : 0;
+      const likes = Array.isArray(item.likes) ? item.likes.length : 0;
+      const comments = Number(item.commentCount || 0);
+      const views = Number(item.viewCount || item.playCount || 0);
+      const recency = Math.max(0, 48 - (Date.now() - new Date(item.createdAt).getTime()) / (1000 * 60 * 60));
+      const score = tagOverlap * 6 + likes * 2 + comments * 2 + views * 0.2 + recency * 0.4 + Math.random() * 2;
+      return { item, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const posts = scored.slice(0, limit).map((entry) => serializePost(entry.item, req.user._id, savedSet));
+    res.json({ posts });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const getPostInsights = async (req, res) => {
+  try {
+    const { postId } = req.params;
+    const days = Math.max(1, Math.min(parseInt(req.query.days, 10) || 30, 180));
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const post = await Post.findById(postId).select("_id author likes commentCount viewCount playCount createdAt isDelete isDeleted");
+    if (!post || post.isDelete || post.isDeleted) return res.status(404).json({ message: "Post not found" });
+    if (String(post.author) !== String(req.user._id)) return res.status(403).json({ message: "Not allowed" });
+
+    const [uniqueViewers, savesAggregate, authorPosts] = await Promise.all([
+      PostView.countDocuments({ post: post._id }),
+      User.aggregate([
+        { $match: { "savedPosts.post": post._id } },
+        { $project: { _id: 1 } },
+        { $count: "total" },
+      ]),
+      Post.find({
+        author: req.user._id,
+        isDelete: { $ne: true },
+        isDeleted: { $ne: true },
+        createdAt: { $gte: since },
+      }).select("_id likes commentCount viewCount playCount createdAt"),
+    ]);
+
+    const saveCount = Number(savesAggregate?.[0]?.total || 0);
+    const likeCount = Array.isArray(post.likes) ? post.likes.length : 0;
+    const commentCount = Number(post.commentCount || 0);
+    const viewCount = Number(post.viewCount || post.playCount || 0);
+    const engagement = likeCount + commentCount + saveCount;
+    const engagementRate = viewCount > 0 ? Number(((engagement / viewCount) * 100).toFixed(2)) : 0;
+
+    const totals = authorPosts.reduce(
+      (acc, item) => {
+        acc.posts += 1;
+        acc.likes += Array.isArray(item.likes) ? item.likes.length : 0;
+        acc.comments += Number(item.commentCount || 0);
+        acc.views += Number(item.viewCount || item.playCount || 0);
+        return acc;
+      },
+      { posts: 0, likes: 0, comments: 0, views: 0 },
+    );
+
+    const byDayMap = new Map();
+    authorPosts.forEach((item) => {
+      const dayKey = new Date(item.createdAt).toISOString().slice(0, 10);
+      const current = byDayMap.get(dayKey) || { date: dayKey, posts: 0, views: 0, likes: 0, comments: 0 };
+      current.posts += 1;
+      current.views += Number(item.viewCount || item.playCount || 0);
+      current.likes += Array.isArray(item.likes) ? item.likes.length : 0;
+      current.comments += Number(item.commentCount || 0);
+      byDayMap.set(dayKey, current);
+    });
+
+    const daily = Array.from(byDayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({
+      post: {
+        postId: String(post._id),
+        createdAt: post.createdAt,
+        likeCount,
+        commentCount,
+        viewCount,
+        uniqueViewers,
+        saveCount,
+        engagementRate,
+      },
+      creator: {
+        days,
+        totals,
+        averageViewsPerPost: totals.posts > 0 ? Math.round(totals.views / totals.posts) : 0,
+      },
+      daily,
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

@@ -13,6 +13,8 @@ import {
   listUserPosts,
   listTrendingPosts,
   searchClips,
+  listRelatedClips,
+  getPostInsights,
   unlikePost,
   trackPostView,
   uploadPostMedia,
@@ -31,6 +33,8 @@ router.post("/", auth, createPostLimiter, createPost);
 router.get("/feed", auth, listFeedPosts);
 router.get("/trending", auth, listTrendingPosts);
 router.get("/search-clips", auth, searchClips);
+router.get("/:postId/related", auth, listRelatedClips);
+router.get("/:postId/insights", auth, getPostInsights);
 router.get("/saved", auth, listSavedPosts);
 router.get("/user/:userId", auth, listUserPosts);
 router.post("/:postId/like", auth, likePost);
