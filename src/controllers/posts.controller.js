@@ -103,6 +103,30 @@ function scorePostByInterests(post, interestSet) {
   return matchCount * 8 + captionHits * 3 + likes * 2 + comments * 2 + views * 0.3 + freshness * 0.4;
 }
 
+function extractCaptionTokens(caption) {
+  const normalized = normalizeTag(caption || "");
+  if (!normalized) return [];
+  return normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !token.startsWith("#"))
+    .slice(0, 20);
+}
+
+function hasImageMedia(post) {
+  return Array.isArray(post?.media) && post.media.some((m) => m?.type === "image" && m?.url);
+}
+
+function overlapCount(aSet, values) {
+  if (!aSet || !(aSet instanceof Set) || aSet.size === 0 || !Array.isArray(values) || values.length === 0) return 0;
+  let count = 0;
+  values.forEach((v) => {
+    const key = normalizeTag(v);
+    if (key && aSet.has(key)) count += 1;
+  });
+  return count;
+}
+
 function interleavePosts(primary, recommended, limit) {
   const result = [];
   let recIdx = 0;
@@ -555,88 +579,99 @@ export const listFeedPosts = async (req, res) => {
     const savedSet = await getSavedSetForUser(req.user._id);
 
     const me = await User.findById(req.user._id).select("_id interests");
-    const interests = Array.isArray(me?.interests)
+    const interestTokens = Array.isArray(me?.interests)
       ? me.interests.map(normalizeTag).filter(Boolean).slice(0, MAX_INTEREST_TOKENS)
       : [];
-    const interestSet = new Set(interests);
+    const interestSet = new Set(interestTokens);
 
-    // Feed consists of posts from people I follow + my own posts
     const followingIds = await getFollowingIds(req.user._id);
-    const authors = Array.from(followingIds);
-    authors.push(req.user._id);
+    const followPlusSelf = new Set(Array.from(followingIds).concat([String(req.user._id)]));
 
-    const query = Post.find({
-      author: { $in: authors },
+    const likedPosts = await Post.find({
+      likes: req.user._id,
       isDelete: { $ne: true },
       isDeleted: { $ne: true },
-    });
-    
-    if (before && !isNaN(before.getTime())) {
-      query.where("createdAt").lt(before);
-    }
-    const posts = await query
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
-    const serializedPrimary = posts.map((p) => serializePost(p, req.user._id, savedSet));
-    const seenIds = new Set(serializedPrimary.map((p) => String(p._id)));
+    })
+      .select("tags caption media")
+      .sort({ updatedAt: -1 })
+      .limit(120);
 
-    const basePublicQuery = {
-      visibility: "public",
-      author: { $nin: authors },
+    const likedTagSet = new Set();
+    const likedTokenSet = new Set();
+    likedPosts.forEach((post) => {
+      if (!hasImageMedia(post)) return;
+      (Array.isArray(post.tags) ? post.tags : []).forEach((tag) => {
+        const normalized = normalizeTag(tag);
+        if (normalized) likedTagSet.add(normalized);
+      });
+      extractCaptionTokens(post.caption).forEach((token) => likedTokenSet.add(token));
+    });
+
+    const candidateQuery = {
+      $or: [
+        { author: { $in: Array.from(followPlusSelf) } },
+        { visibility: "public" },
+      ],
       isDelete: { $ne: true },
       isDeleted: { $ne: true },
     };
     if (before && !isNaN(before.getTime())) {
-      basePublicQuery.createdAt = { $lt: before };
+      candidateQuery.createdAt = { $lt: before };
     }
 
-    let recommendedSerialized = [];
-    if (interests.length) {
-      const interestRegex = buildInterestRegex(interests);
-      const interestQuery = {
-        ...basePublicQuery,
-        $or: [
-          { tags: { $in: interests } },
-          ...(interestRegex ? [{ caption: { $regex: interestRegex } }] : []),
-        ],
-      };
-      const interestCandidates = await Post.find(interestQuery)
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
-      const scored = interestCandidates
-        .map((post) => ({ post, score: scorePostByInterests(post, interestSet) }))
-        .sort((a, b) => (b.score || 0) - (a.score || 0));
-      recommendedSerialized = scored
-        .map((entry) => serializePost(entry.post, req.user._id, savedSet))
-        .filter((p) => !seenIds.has(String(p._id)));
+    const candidates = await Post.find(candidateQuery)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(420, limit * 20))
+      .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
+
+    const scored = candidates
+      .filter((post) => {
+        const authorId = String(post?.author?._id || post?.author || "");
+        if (!authorId) return false;
+        if (followPlusSelf.has(authorId)) return true;
+        return post.visibility === "public";
+      })
+      .map((post) => {
+        const tags = Array.isArray(post.tags) ? post.tags : [];
+        const captionTokens = extractCaptionTokens(post.caption);
+        const likes = Array.isArray(post.likes) ? post.likes.length : 0;
+        const comments = Number(post.commentCount || 0);
+        const views = Math.max(Number(post.viewCount || 0), Number(post.playCount || 0), 0);
+        const isFollowing = followPlusSelf.has(String(post?.author?._id || post?.author));
+        const publicDiscover = post.visibility === "public" ? 1 : 0;
+        const ageHours = Math.max(1, (Date.now() - new Date(post.createdAt).getTime()) / (1000 * 60 * 60));
+        const freshness = Math.max(0, 48 - ageHours);
+        const interestScore = scorePostByInterests(post, interestSet);
+        const likedTagScore = overlapCount(likedTagSet, tags) * 5;
+        const likedCaptionScore = overlapCount(likedTokenSet, captionTokens) * 2.2;
+        const engagementScore = likes * 1.8 + comments * 1.6 + views * 0.12;
+        const affinityScore = (isFollowing ? 4.5 : 0) + publicDiscover * 1.4;
+        const randomJitter = Math.random() * 6.2;
+        const finalScore = interestScore + likedTagScore + likedCaptionScore + engagementScore + freshness * 0.35 + affinityScore + randomJitter;
+        return { post, finalScore };
+      })
+      .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+
+    const top = scored.slice(0, Math.max(limit * 3, 36));
+    const mixed = [];
+    while (top.length && mixed.length < limit) {
+      const windowSize = Math.min(6, top.length);
+      const randomIndex = Math.floor(Math.random() * windowSize);
+      mixed.push(top[randomIndex]);
+      top.splice(randomIndex, 1);
     }
 
-    const targetRecommended = Math.max(4, Math.round(limit * 0.35));
-    recommendedSerialized = recommendedSerialized.slice(0, targetRecommended);
-    recommendedSerialized.forEach((p) => seenIds.add(String(p._id)));
+    const posts = mixed
+      .map((entry) => serializePost(entry.post, req.user._id, savedSet))
+      .slice(0, limit);
 
-    let merged = interleavePosts(serializedPrimary, recommendedSerialized, limit);
-
-    if (merged.length < limit) {
-      const fallbackCandidates = await Post.find(basePublicQuery)
-        .sort({ createdAt: -1 })
-        .limit(200)
-        .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
-      const fallbackSerialized = fallbackCandidates
-        .map((p) => serializePost(p, req.user._id, savedSet))
-        .filter((p) => !seenIds.has(String(p._id)));
-      merged = merged.concat(fallbackSerialized).slice(0, limit);
-    }
-
-    const oldest = merged
+    const oldest = posts
       .map((p) => new Date(p.createdAt))
       .filter((d) => !isNaN(d.getTime()))
       .sort((a, b) => a.getTime() - b.getTime())[0];
     const nextCursor = oldest ? oldest.toISOString() : null;
 
-    res.json({ posts: merged, nextCursor });
+    res.json({ posts, nextCursor });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
