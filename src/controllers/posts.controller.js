@@ -602,6 +602,8 @@ export const listFeedPosts = async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
     const before = req.query.before ? new Date(req.query.before) : null;
+    const contentType = safeString(req.query.contentType).toLowerCase();
+    const videoOnly = contentType === "video" || contentType === "clips";
     const savedSet = await getSavedSetForUser(req.user._id);
 
     const me = await User.findById(req.user._id).select("_id interests gender");
@@ -628,7 +630,6 @@ export const listFeedPosts = async (req, res) => {
     const likedTagSet = new Set();
     const likedTokenSet = new Set();
     likedPosts.forEach((post) => {
-      if (!hasImageMedia(post)) return;
       (Array.isArray(post.tags) ? post.tags : []).forEach((tag) => {
         const normalized = normalizeTag(tag);
         if (normalized) likedTagSet.add(normalized);
@@ -644,13 +645,17 @@ export const listFeedPosts = async (req, res) => {
       isDelete: { $ne: true },
       isDeleted: { $ne: true },
     };
+    if (videoOnly) {
+      candidateQuery.media = { $elemMatch: { type: "video", url: { $exists: true, $ne: "" } } };
+    }
     if (before && !isNaN(before.getTime())) {
       candidateQuery.createdAt = { $lt: before };
     }
 
+    const candidateLimit = Math.min(700, Math.max(limit * 30, 200));
     const candidates = await Post.find(candidateQuery)
       .sort({ createdAt: -1 })
-      .limit(Math.min(420, limit * 20))
+      .limit(candidateLimit)
       .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
 
     const scored = candidates
@@ -689,28 +694,51 @@ export const listFeedPosts = async (req, res) => {
           : 0;
         const adultBoost = adultBoostRaw * adultBoostMultiplier;
         const finalScore = interestScore + likedTagScore + likedCaptionScore + engagementScore + freshness * 0.35 + affinityScore + adultBoost + randomJitter;
-        return { post, finalScore };
-      })
-      .sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+        const personalizedSignal =
+          isFollowing ||
+          interestScore > 0 ||
+          likedTagScore > 0 ||
+          likedCaptionScore > 0;
+        return { post, finalScore, personalizedSignal };
+      });
 
-    const top = scored.slice(0, Math.max(limit * 3, 36));
-    const mixed = [];
-    while (top.length && mixed.length < limit) {
-      const windowSize = Math.min(6, top.length);
-      const randomIndex = Math.floor(Math.random() * windowSize);
-      mixed.push(top[randomIndex]);
-      top.splice(randomIndex, 1);
-    }
+    scored.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+    const personalizedPool = scored.filter((entry) => entry.personalizedSignal);
+    const fallbackPool = scored.filter((entry) => !entry.personalizedSignal);
 
-    const posts = mixed
-      .map((entry) => serializePost(entry.post, req.user._id, savedSet))
-      .slice(0, limit);
+    const pickFromPool = (pool, count, windowSize = 6) => {
+      const picked = [];
+      const mutable = pool.slice();
+      while (mutable.length && picked.length < count) {
+        const window = Math.min(windowSize, mutable.length);
+        const randomIndex = Math.floor(Math.random() * window);
+        picked.push(mutable[randomIndex]);
+        mutable.splice(randomIndex, 1);
+      }
+      return picked;
+    };
 
-    const oldest = posts
-      .map((p) => new Date(p.createdAt))
-      .filter((d) => !isNaN(d.getTime()))
-      .sort((a, b) => a.getTime() - b.getTime())[0];
-    const nextCursor = oldest ? oldest.toISOString() : null;
+    const personalizedPicked = pickFromPool(
+      personalizedPool,
+      Math.min(limit, Math.max(6, Math.floor(limit * 0.75))),
+      5,
+    );
+
+    const usedIds = new Set(personalizedPicked.map((entry) => String(entry.post?._id)));
+    const fallbackSource = fallbackPool
+      .concat(
+        personalizedPool.filter((entry) => !usedIds.has(String(entry.post?._id)))
+      )
+      .filter((entry) => !usedIds.has(String(entry.post?._id)));
+    const fallbackPicked = pickFromPool(fallbackSource, Math.max(0, limit - personalizedPicked.length), 10);
+
+    const merged = personalizedPicked.concat(fallbackPicked).slice(0, limit);
+    const posts = merged.map((entry) => serializePost(entry.post, req.user._id, savedSet));
+
+    const nextCursor =
+      candidates.length === candidateLimit && candidates[candidates.length - 1]?.createdAt
+        ? new Date(candidates[candidates.length - 1].createdAt).toISOString()
+        : null;
 
     res.json({ posts, nextCursor });
   } catch (e) {
@@ -1019,7 +1047,7 @@ export const listUserPosts = async (req, res) => {
     });
     if (before && !isNaN(before.getTime())) query.where("createdAt").lt(before);
     const posts = await query
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
       .populate("author", "_id name avatarUrl isPrivate isVerified verificationType");
     const serialized = posts.map((p) => serializePost(p, req.user._id, savedSet));
